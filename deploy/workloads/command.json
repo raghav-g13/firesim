@@ -1,0 +1,8 @@
+{
+	"benchmark_name": "command",
+	"common_simulation_outputs": [
+		"uartlog"
+	],
+	"common_bootbinary": "../../../../../software/firemarshal/images/firechip/command/command-bin",
+	"common_rootfs": "../../../../../software/firemarshal/images/firechip/command/command.img"
+}
