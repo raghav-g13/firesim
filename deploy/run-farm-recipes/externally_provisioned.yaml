@@ -78,6 +78,11 @@ args:
             num_metasims: 0
             use_for_switch_only: false
 
+        - two_metasims_spec:
+            num_fpgas: 0
+            num_metasims: 2
+            use_for_switch_only: false
+
         - three_fpgas_spec:
             num_fpgas: 3
             num_metasims: 0

@@ -1,0 +1,8 @@
+{
+	"benchmark_name": "ctc-test",
+	"common_simulation_outputs": [
+		"uartlog"
+	],
+	"common_bootbinary": "../../../../../software/firemarshal/test/ctc-test/ctc-test.riscv",
+	"common_rootfs": "../../../../../software/firemarshal/boards/default/installers/firesim/dummy.rootfs"
+}
