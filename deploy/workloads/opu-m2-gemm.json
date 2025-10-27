@@ -1,0 +1,8 @@
+{
+	"benchmark_name": "opu-m2-gemm",
+	"common_simulation_outputs": [
+		"uartlog"
+	],
+	"common_bootbinary": "../../../../../software/firemarshal/test/opu-m2-gemm/opu-m2-gemm.riscv",
+	"common_rootfs": "../../../../../software/firemarshal/boards/default/installers/firesim/dummy.rootfs"
+}
