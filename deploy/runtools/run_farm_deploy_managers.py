@@ -1343,6 +1343,12 @@ class XilinxAlveoU200InstanceDeployManager(XilinxAlveoInstanceDeployManager):
         self.PLATFORM_NAME = "xilinx_alveo_u200"
 
 
+class CorigineXB10InstanceDeployManager(XilinxAlveoInstanceDeployManager):
+    def __init__(self, parent_node: Inst) -> None:
+        super().__init__(parent_node)
+        self.PLATFORM_NAME = "corigine_xb10"
+
+
 class RHSResearchNitefuryIIInstanceDeployManager(XilinxAlveoInstanceDeployManager):
     def __init__(self, parent_node: Inst) -> None:
         super().__init__(parent_node)
