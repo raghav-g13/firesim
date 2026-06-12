@@ -917,6 +917,13 @@ class CorigineXB10BitBuilder(XilinxAlveoBitBuilder):
         self.BOARD_NAME = "xb10"
 
 
+class XilinxAlveoV80BitBuilder(XilinxAlveoBitBuilder):
+    """V80 Versal ACAP (QDMA, PDI output)."""
+    def __init__(self, build_config: BuildConfig, args: Dict[str, Any]) -> None:
+        super().__init__(build_config, args)
+        self.BOARD_NAME = "v80"
+
+
 class XilinxVCU118BitBuilder(XilinxAlveoBitBuilder):
     """Bit builder class that builds a Xilinx VCU118 bitstream from the build config."""
 

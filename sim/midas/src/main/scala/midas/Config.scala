@@ -186,6 +186,17 @@ class CorigineXB10Config
       case F1ShimHasQSFPPorts  => false
     }) ++ new XilinxAlveoU250Config)
 
+class XilinxAlveoV80Config
+    extends Config(new Config((_, _, _) => {
+      case HostMemChannelKey   =>
+        HostMemChannelParams(
+          size      = 0x200000000L, // 8 GiB — V80 DDR4 capacity
+          beatBytes = 8,
+          idBits    = 16,
+        )
+      case F1ShimHasQSFPPorts  => false
+    }) ++ new XilinxAlveoU250Config)
+
 class NitefuryConfig
     extends Config(new Config((_, _, _) => {
       case Platform                    => (p: Parameters) => new F1Shim()(p)

@@ -1444,6 +1444,12 @@ class CorigineXB10InstanceDeployManager(XilinxAlveoInstanceDeployManager):
 
 
 
+class XilinxAlveoV80InstanceDeployManager(XilinxAlveoInstanceDeployManager):
+    def __init__(self, parent_node: Inst) -> None:
+        super().__init__(parent_node)
+        self.PLATFORM_NAME = "xilinx_alveo_v80"
+
+
 class RHSResearchNitefuryIIInstanceDeployManager(XilinxAlveoInstanceDeployManager):
     def __init__(self, parent_node: Inst) -> None:
         super().__init__(parent_node)
