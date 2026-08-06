@@ -47,10 +47,10 @@ module overall_fpga_top(
     `undef AMBA_AXI_ID
 
     // F1Shim generates zero-based DDR addresses; NoC DDR_CH2 base is 0x600_0000_0000
-    wire [39:0] firesim_slave_0_awaddr;
-    wire [39:0] firesim_slave_0_araddr;
-    assign DDR4_0_S_AXI_awaddr = {24'b0, firesim_slave_0_awaddr} + 64'h0000_0600_0000_0000;
-    assign DDR4_0_S_AXI_araddr = {24'b0, firesim_slave_0_araddr} + 64'h0000_0600_0000_0000;
+    wire [34:0] firesim_slave_0_awaddr;
+    wire [34:0] firesim_slave_0_araddr;
+    assign DDR4_0_S_AXI_awaddr = {29'b0, firesim_slave_0_awaddr} + 64'h0000_0600_0000_0000;
+    assign DDR4_0_S_AXI_araddr = {29'b0, firesim_slave_0_araddr} + 64'h0000_0600_0000_0000;
 
     design_1 design_1_i (
         .sys_clk(sys_clk)
