@@ -115,8 +115,7 @@ class F1Config
           CPUManagedAXI4Params(
             addrBits = 64,
             dataBits = 512,
-            // idBits   = 6,
-            idBits   = 16,
+            idBits   = 6,
           )
         )
       case FPGAManagedAXI4Key          => None
@@ -190,11 +189,19 @@ class XilinxAlveoV80Config
     extends Config(new Config((_, _, _) => {
       case HostMemChannelKey   =>
         HostMemChannelParams(
-          size      = 0x200000000L, // 8 GiB — V80 DDR4 capacity
+          size      = 0x800000000L, // 32 GiB — V80 DDR4 capacity
           beatBytes = 8,
           idBits    = 16,
         )
       case F1ShimHasQSFPPorts  => false
+      case CPUManagedAXI4Key   =>
+        Some(
+          CPUManagedAXI4Params(
+            addrBits = 64,
+            dataBits = 512,
+            idBits   = 16,
+          )
+        )
     }) ++ new XilinxAlveoU250Config)
 
 class NitefuryConfig
