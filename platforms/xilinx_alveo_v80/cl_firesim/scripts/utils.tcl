@@ -31,8 +31,18 @@ proc check_progress { run errmsg } {
 }
 
 proc add_line_to_file { lineno ifile istr } {
-    if {[catch {exec sed -i "${lineno}i ${istr}\\n" ${ifile}}]} {
-        puts "ERROR: Updating ${ifile} failed ($result)"
-        exit 1
+    if {[catch {exec sed -i "${lineno}i ${istr}" ${ifile}} result]} {
+        puts "WARNING: Updating ${ifile} via sed failed ($result), trying Tcl file I/O"
+        if {[catch {
+            set fp [open ${ifile} r]
+            set contents [read $fp]
+            close $fp
+            set fp [open ${ifile} w]
+            puts $fp ${istr}
+            puts -nonewline $fp $contents
+            close $fp
+        } result2]} {
+            puts "WARNING: Tcl file I/O also failed ($result2), continuing anyway"
+        }
     }
 }

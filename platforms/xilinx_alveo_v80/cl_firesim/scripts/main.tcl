@@ -39,7 +39,8 @@ foreach addFile [list \
     ${root_dir}/design/helpers.vh \
     ${root_dir}/design/overall_fpga_top.v \
     ${root_dir}/design/FireSim-generated.sv \
-    ${root_dir}/design/FireSim-generated.defines.vh
+    ${root_dir}/design/FireSim-generated.defines.vh \
+    ${root_dir}/design/plusarg_reader.v
 ] {
   set addFile [retrieveVersionedFile $addFile $vivado_version]
   check_file_exists $addFile

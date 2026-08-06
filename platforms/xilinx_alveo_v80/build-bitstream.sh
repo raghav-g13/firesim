@@ -76,4 +76,21 @@ cd $CL_DIR
 # to 2 MB. Required to keep synth_design from hitting `[Synth 8-7098] Stack
 # limit reached` during LSU/FSM inference on large BOOM designs. Propagates
 # to vivado processes spawned by launch_runs.
+# Fix locale for containers missing en_US.UTF-8
+if [ ! -d /usr/lib/locale/en_US.UTF-8 ] && [ -d /usr/lib/locale/C.utf8 ]; then
+    mkdir -p /tmp/locales/en_US.UTF-8
+    cp -r /usr/lib/locale/C.utf8/* /tmp/locales/en_US.UTF-8/ 2>/dev/null
+    export LOCPATH=/tmp/locales
+fi
+
+# Add compat libs (libtinfo.so.5, libncurses.so.5) if present in /tmp
+if [ -f /tmp/libtinfo.so.5 ]; then
+    export LD_LIBRARY_PATH=/tmp:${LD_LIBRARY_PATH}
+fi
+
+# Force single-threaded to avoid validate_noc deadlock
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
 vivado -stack 2000 -mode batch -source $CL_DIR/scripts/main.tcl -tclargs $FREQUENCY $STRATEGY $BOARD
