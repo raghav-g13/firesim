@@ -1449,6 +1449,344 @@ class XilinxAlveoV80InstanceDeployManager(XilinxAlveoInstanceDeployManager):
         super().__init__(parent_node)
         self.PLATFORM_NAME = "xilinx_alveo_v80"
 
+    def _compute_qdma_bdf(self, bdf_str: str) -> int:
+        """Compute QDMA BDF encoding from a BDF string like 'b1:00.0'.
+
+        Matches the driver convention in simif_xilinx_alveo_v80.cc:
+        (bus << 12) | (device << 4) | function
+        """
+        # Split 'b1:00.0' -> bus='b1', dev='00', func='0'
+        parts = bdf_str.replace('.', ':').split(':')
+        bus = int(parts[0], 16)
+        device = int(parts[1], 16)
+        function = int(parts[2], 16)
+        return (bus << 12) | (device << 4) | function
+
+    def load_qdma(self) -> None:
+        """Load the QDMA-PF kernel module and set up MM queues for each FPGA slot."""
+        if self.instance_assigned_simulations():
+            # Load qdma-pf module if not already loaded
+            if run("lsmod | grep -wq qdma_pf", warn_only=True).return_code != 0:
+                self.instance_logger("Loading QDMA-PF Driver Kernel Module.")
+                run("sudo modprobe qdma-pf", shell=True)
+            else:
+                self.instance_logger("QDMA-PF Driver Kernel Module already loaded.")
+
+            json_db = self.parent_node.get_fpga_db()
+            collect = run(f"cat {json_db}")
+            db = json.loads(collect)
+
+            for slotno in range(len(self.parent_node.sim_slots)):
+                assert slotno < len(db), \
+                    f"Less FPGAs available than slots ({slotno} >= {len(db)})"
+                bdf_str = db[slotno]["bdf"]
+                qdma_bdf = self._compute_qdma_bdf(bdf_str)
+
+                self.instance_logger(
+                    f"Setting up QDMA queue for slot {slotno} "
+                    f"(BDF: {bdf_str}, QDMA BDF: {qdma_bdf:05x})"
+                )
+
+                # Set qmax for this device
+                run(f"echo 512 | sudo tee /sys/bus/pci/devices/0000:{bdf_str}/qdma/qmax")
+
+                # Add MM queue 0 bidirectional
+                run(f"dma-ctl qdma{qdma_bdf:05x} q add idx 0 mode mm dir bi")
+
+                # Start MM queue 0 bidirectional
+                run(f"dma-ctl qdma{qdma_bdf:05x} q start idx 0 dir bi")
+
+            # Set permissions on QDMA device nodes
+            run("sudo chmod 666 /dev/qdma*", shell=True)
+
+    def unload_qdma(self) -> None:
+        """Tear down QDMA queues and unload the QDMA-PF kernel module."""
+        if self.instance_assigned_simulations():
+            if run("lsmod | grep -wq qdma_pf", warn_only=True).return_code == 0:
+                json_db = self.parent_node.get_fpga_db()
+                collect = run(f"cat {json_db}")
+                db = json.loads(collect)
+
+                for slotno in range(len(self.parent_node.sim_slots)):
+                    if slotno >= len(db):
+                        break
+                    bdf_str = db[slotno]["bdf"]
+                    qdma_bdf = self._compute_qdma_bdf(bdf_str)
+
+                    self.instance_logger(
+                        f"Tearing down QDMA queue for slot {slotno} "
+                        f"(QDMA BDF: {qdma_bdf:05x})"
+                    )
+
+                    # Stop and delete queue (warn_only since queues might not exist)
+                    with warn_only():
+                        run(f"dma-ctl qdma{qdma_bdf:05x} q stop idx 0 dir bi")
+                    with warn_only():
+                        run(f"dma-ctl qdma{qdma_bdf:05x} q del idx 0 dir bi")
+
+                self.instance_logger("Unloading QDMA-PF Driver Kernel Module.")
+                run("sudo modprobe -r qdma-pf")
+            else:
+                self.instance_logger("QDMA-PF Driver Kernel Module already unloaded.")
+
+    def flash_fpgas(self) -> None:
+        """Program V80 FPGAs with PDI and handle PCIe re-enumeration.
+
+        Versal full-bitstream PDI programming resets the SoC and drops the
+        PCIe link.  Instead of per-BDF reconnect (which assumes the BDF is
+        stable), we do a full PCIe bus rescan after programming and wait for
+        the link to re-train.
+        """
+        if self.instance_assigned_simulations():
+            self.instance_logger("Flash all FPGA Slots (V80 PDI programming).")
+
+            json_db = self.parent_node.get_fpga_db()
+            collect = run(f"cat {json_db}")
+            db = json.loads(collect)
+
+            mapping_lines = []
+            scripts_synced = False
+
+            for slotno, firesimservernode in enumerate(self.parent_node.sim_slots):
+                serv = firesimservernode
+                hwcfg = serv.get_resolved_server_hardware_config()
+
+                bitstream_tar = hwcfg.get_bitstream_tar_filename()
+                remote_sim_dir = self.get_remote_sim_dir_for_slot(slotno)
+                bitstream_tar_unpack_dir = os.path.join(
+                    remote_sim_dir, str(self.PLATFORM_NAME)
+                )
+                bit = os.path.join(bitstream_tar_unpack_dir, "firesim.bit")
+
+                run(f"rm -rf {bitstream_tar_unpack_dir}")
+                run(f"tar xvf {remote_sim_dir}/{bitstream_tar} -C {remote_sim_dir}")
+
+                if not scripts_synced:
+                    rsync_cap = rsync_project(
+                        local_dir=f"../platforms/{self.PLATFORM_NAME}/scripts",
+                        remote_dir=remote_sim_dir,
+                        ssh_opts="-o StrictHostKeyChecking=no",
+                        extra_opts="-L -p",
+                        capture=True,
+                    )
+                    rootLogger.debug(rsync_cap)
+                    rootLogger.debug(rsync_cap.stderr)
+                    scripts_synced = True
+                    scripts_dir = f"{remote_sim_dir}/scripts"
+
+                assert slotno < len(db), \
+                    f"Less FPGAs than slots ({slotno} >= {len(db)})"
+                uid = db[slotno]["uid"]
+                self.instance_logger(f"Slot {slotno}: {uid} -> {bit}")
+                mapping_lines.append(f"{uid} {bit}")
+
+            fpga_util = f"{script_path}/firesim-fpga-util.py"
+            check_script(
+                fpga_util,
+                Path(f"{get_deploy_dir()}/../platforms/{self.PLATFORM_NAME}/scripts"),
+            )
+
+            # Step 1: Disconnect all FPGAs from PCI bus
+            self.instance_logger("Disconnecting all FPGAs from PCI bus.")
+            for slotno in range(len(self.parent_node.sim_slots)):
+                bdf = db[slotno]["bdf"]
+                run(f"{fpga_util} --bdf {bdf} --disconnect-bdf --fpga-db {json_db}")
+
+            # Step 2: Program all FPGAs via Vivado batch
+            map_file = f"{self.get_remote_sim_dir_for_slot(0)}/flash_map.txt"
+            map_content = "\n".join(mapping_lines)
+            run(f"cat > {map_file} << 'MAPEOF'\n{map_content}\nMAPEOF")
+
+            tcl = f"{scripts_dir}/program_fpga_fleet.tcl"
+            vivado = run("which vivado || which vivado_lab", warn_only=True).strip()
+            if not vivado:
+                raise RuntimeError("Could not find vivado or vivado_lab on PATH")
+            run(f"{vivado} -mode batch -source {tcl} -tclargs -map_file {map_file}")
+
+            # Step 3: Wait for PCIe link to re-establish after Versal PDI programming
+            self.instance_logger(
+                "Waiting for PCIe link re-training after Versal PDI programming."
+            )
+            run("sleep 10")
+
+            # Step 4: Full PCIe bus rescan (BDF may change after Versal reprogramming)
+            self.instance_logger("Performing full PCIe bus rescan.")
+            run("sudo sh -c 'echo 1 > /sys/bus/pci/rescan'")
+
+            # Step 5: Retry rescan until devices appear (up to 30 seconds)
+            self.instance_logger("Waiting for FPGA devices to reappear on PCIe bus.")
+            run(
+                "for i in $(seq 1 6); do "
+                "  if lspci | grep -iq xilinx; then break; fi; "
+                "  sleep 5; "
+                "  sudo sh -c 'echo 1 > /sys/bus/pci/rescan'; "
+                "done"
+            )
+
+            # Verify devices appeared
+            result = run("lspci | grep -i xilinx", warn_only=True)
+            if result.return_code != 0:
+                raise RuntimeError(
+                    "FPGA devices did not reappear on PCIe bus after rescan"
+                )
+
+            # Step 6: Enable memory-mapped transfers on reappeared devices
+            self.instance_logger("Enabling memory-mapped transfers on FPGA devices.")
+            xilinx_devs = run("lspci -D | grep -i xilinx")
+            for line in xilinx_devs.splitlines():
+                line = line.strip()
+                if line:
+                    ebdf = line.split()[0]  # e.g. '0000:b1:00.0'
+                    self.instance_logger(
+                        f"Enabling memory-mapped transfers for {ebdf}"
+                    )
+                    run(f"sudo setpci -s {ebdf} COMMAND=0x02")
+
+
+    def infrasetup_instance(self, uridir: str) -> None:
+        """Handle infrastructure setup for V80 platform (uses QDMA instead of XDMA)."""
+        metasim_enabled = self.parent_node.metasimulation_enabled
+
+        if self.instance_assigned_simulations():
+            # This is a sim-host node.
+
+            # copy sim infrastructure
+            for slotno in range(len(self.parent_node.sim_slots)):
+                self.copy_sim_slot_infrastructure(slotno, uridir)
+                self.extract_driver_tarball(slotno)
+
+            if not metasim_enabled:
+                # unload qdma driver
+                self.unload_qdma()
+                # flash fpgas
+                self.flash_fpgas()
+                # load qdma driver
+                self.load_qdma()
+                # change pcie permissions
+                self.change_pcie_perms()
+
+        if self.instance_assigned_switches():
+            # all nodes could have a switch
+            for slotno in range(len(self.parent_node.switch_slots)):
+                self.copy_switch_slot_infrastructure(slotno)
+
+        if self.instance_assigned_pipes():
+            for slotno in range(len(self.parent_node.pipe_slots)):
+                self.copy_pipe_slot_infrastructure(slotno)
+
+    def enumerate_fpgas(self, uridir: str) -> None:
+        """Handle FPGA enumeration for V80 platform (uses QDMA instead of XDMA)."""
+
+        if self.instance_assigned_simulations():
+            # This is a sim-host node.
+
+            # unload qdma driver
+            self.unload_qdma()
+            # load qdma driver
+            self.load_qdma()
+
+            # change all pcie permissions
+            self.change_all_pcie_perms()
+
+            # run the passes
+            self.create_fpga_database(uridir)
+
+    def start_sim_slot(self, slotno: int) -> None:
+        """Start a simulation (V80 uses BAR1 for MMIO instead of BAR0)."""
+        if self.instance_assigned_simulations():
+            self.instance_logger(
+                f"""Starting {self.sim_type_message} simulation for slot: {slotno}."""
+            )
+            remote_home_dir = self.parent_node.sim_dir
+            remote_sim_dir = f"""{remote_home_dir}/sim_slot_{slotno}/"""
+            assert slotno < len(
+                self.parent_node.sim_slots
+            ), f"{slotno} can not index into sim_slots {len(self.parent_node.sim_slots)} on {self.parent_node.host}"
+            server = self.parent_node.sim_slots[slotno]
+
+            if not self.parent_node.metasimulation_enabled:
+                bdf = (
+                    self.slot_to_bdf(slotno, self.parent_node.get_fpga_db())
+                    .replace(".", ":")
+                    .split(":")
+                )
+                extra_args = f"+domain=0x0000 +bus=0x{bdf[0]} +device=0x{bdf[1]} +function=0x{bdf[2]} +bar=0x1 +pci-vendor=0x10ee +pci-device=0x903f"
+            else:
+                extra_args = None
+
+            # make the local job results dir for this sim slot
+            server.mkdir_and_prep_local_job_results_dir()
+            sim_start_script_local_path = server.write_sim_start_script(
+                slotno, extra_args
+            )
+            put(sim_start_script_local_path, remote_sim_dir)
+
+            with cd(remote_sim_dir):
+                run("chmod +x sim-run.sh")
+                run("./sim-run.sh")
+
+    def create_fpga_database(self, uridir: str) -> None:
+        """Single-session variant that avoids the hw_server back-to-back wedge."""
+        self.instance_logger(f"""Creating FPGA database (single-session)""")
+
+        remote_home_dir = self.parent_node.get_sim_dir()
+        remote_sim_dir = f"{remote_home_dir}/enumerate_fpgas_staging"
+        remote_sim_rsync_dir = f"{remote_sim_dir}/rsyncdir/"
+        run(f"mkdir -p {remote_sim_rsync_dir}")
+
+        assert len(self.parent_node.sim_slots) > 0
+        serv = self.parent_node.sim_slots[0]
+
+        files_to_copy = serv.get_required_files_local_paths()
+
+        hwcfg = serv.get_resolved_server_hardware_config()
+        files_to_copy.extend(hwcfg.get_local_uri_paths(uridir))
+
+        for local_path, remote_path in files_to_copy:
+            rsync_cap = rsync_project(
+                local_dir=local_path,
+                remote_dir=pjoin(remote_sim_rsync_dir, remote_path),
+                ssh_opts="-o StrictHostKeyChecking=no",
+                extra_opts="-L",
+                capture=True,
+            )
+            rootLogger.debug(rsync_cap)
+            rootLogger.debug(rsync_cap.stderr)
+
+        run(f"cp -r {remote_sim_rsync_dir}/* {remote_sim_dir}/", shell=True)
+
+        rsync_cap = rsync_project(
+            local_dir=f"../platforms/{self.PLATFORM_NAME}/scripts",
+            remote_dir=remote_sim_dir + "/",
+            ssh_opts="-o StrictHostKeyChecking=no",
+            extra_opts="-L -p",
+            capture=True,
+        )
+        rootLogger.debug(rsync_cap)
+        rootLogger.debug(rsync_cap.stderr)
+
+        bitstream_tar = hwcfg.get_bitstream_tar_filename()
+        bitstream_tar_unpack_dir = f"{remote_sim_dir}/{self.PLATFORM_NAME}"
+        bitstream = f"{remote_sim_dir}/{self.PLATFORM_NAME}/firesim.bit"
+
+        with cd(remote_sim_dir):
+            run(f"tar -xf {hwcfg.get_driver_tar_filename()}")
+
+        run(f"rm -rf {bitstream_tar_unpack_dir}")
+        run(f"tar xvf {remote_sim_dir}/{bitstream_tar} -C {remote_sim_dir}")
+
+        driver = f"{remote_sim_dir}/FireSim-{self.PLATFORM_NAME}"
+        json_db = self.parent_node.get_fpga_db()
+
+        with cd(remote_sim_dir):
+            cmd = f"{script_path}/firesim-generate-fpga-db.py"
+            check_script(
+                cmd,
+                Path(f"{get_deploy_dir()}/../platforms/{self.PLATFORM_NAME}/scripts"),
+            )
+            run(f"""{cmd} --bitstream {bitstream} --driver {driver} --out-db-json {json_db}""")
+
+
 
 class RHSResearchNitefuryIIInstanceDeployManager(XilinxAlveoInstanceDeployManager):
     def __init__(self, parent_node: Inst) -> None:
