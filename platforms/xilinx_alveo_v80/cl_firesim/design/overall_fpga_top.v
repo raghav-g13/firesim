@@ -96,6 +96,145 @@ module overall_fpga_top(
         , .sys_reset_n(sys_reset_n)
     );
 
+    // =========================================================================
+    // Simulation-only AXI SRAM for QDMA DMA testing
+    // =========================================================================
+    // F1Shim's CPUManagedStreamEngine never generates AXI write responses
+    // (b_valid is optimized to constant 0 by FIRRTL) and provides no memory
+    // semantics for read-back. This SRAM sits on the PCIE_M_AXI bus during
+    // simulation to provide proper AXI4 write/read responses for QDMA MM
+    // DMA testing (H2C writes + C2H reads).
+    //
+    // Under ifndef SIMULATION, F1Shim drives the PCIE_M_AXI slave signals
+    // directly as in the real FPGA design.
+    // =========================================================================
+
+`ifdef SIMULATION
+    // Intermediate wires: F1Shim io_pcis slave outputs (unused in sim)
+    wire        pcis_fs_awready;
+    wire        pcis_fs_wready;
+    wire        pcis_fs_bvalid;
+    wire [1:0]  pcis_fs_bresp;
+    wire [15:0] pcis_fs_bid;
+    wire        pcis_fs_arready;
+    wire        pcis_fs_rvalid;
+    wire [511:0] pcis_fs_rdata;
+    wire        pcis_fs_rlast;
+    wire [1:0]  pcis_fs_rresp;
+    wire [15:0] pcis_fs_rid;
+
+    // 8KB SRAM for DMA data storage
+    reg [7:0] pcis_mem [0:8191];
+
+    // Write channel state
+    reg        pcis_aw_active;
+    reg [12:0] pcis_wr_base_addr;
+    reg [7:0]  pcis_wr_len;
+    reg [1:0]  pcis_wr_id;
+    reg [7:0]  pcis_wr_beat;
+
+    // B response state
+    reg        pcis_b_pending;
+    reg [1:0]  pcis_b_id_reg;
+
+    // Read channel state
+    reg        pcis_rd_active;
+    reg [12:0] pcis_rd_base_addr;
+    reg [7:0]  pcis_rd_len;
+    reg [1:0]  pcis_rd_id;
+    reg [7:0]  pcis_rd_beat;
+
+    // Write channel control: SRAM drives PCIE_M_AXI slave signals
+    assign PCIE_M_AXI_awready = !pcis_aw_active && !pcis_b_pending;
+    assign PCIE_M_AXI_wready  = pcis_aw_active;
+    assign PCIE_M_AXI_bvalid  = pcis_b_pending;
+    assign PCIE_M_AXI_bresp   = 2'b00;
+    assign PCIE_M_AXI_bid     = pcis_b_id_reg;
+
+    // Read channel control: SRAM drives PCIE_M_AXI slave signals
+    assign PCIE_M_AXI_arready = !pcis_rd_active;
+    assign PCIE_M_AXI_rvalid  = pcis_rd_active;
+    assign PCIE_M_AXI_rlast   = pcis_rd_active && (pcis_rd_beat == pcis_rd_len);
+    assign PCIE_M_AXI_rresp   = 2'b00;
+    assign PCIE_M_AXI_rid     = pcis_rd_id;
+
+    // Read data from SRAM (combinational lookup)
+    integer pcis_rd_byte_idx;
+    reg [511:0] pcis_rdata_comb;
+    always @(*) begin
+        pcis_rdata_comb = 512'b0;
+        for (pcis_rd_byte_idx = 0; pcis_rd_byte_idx < 64; pcis_rd_byte_idx = pcis_rd_byte_idx + 1) begin
+            pcis_rdata_comb[pcis_rd_byte_idx*8 +: 8] = pcis_mem[((pcis_rd_base_addr + {5'b0, pcis_rd_beat, 6'b0} + pcis_rd_byte_idx) & 13'h1FFF)];
+        end
+    end
+    assign PCIE_M_AXI_rdata = pcis_rdata_comb;
+
+    // Sequential FSM for write and read channels
+    integer pcis_wr_byte_idx;
+    always @(posedge sys_clk) begin
+        if (!sys_reset_n) begin
+            pcis_aw_active <= 1'b0;
+            pcis_b_pending <= 1'b0;
+            pcis_rd_active <= 1'b0;
+            pcis_wr_beat   <= 8'h0;
+            pcis_rd_beat   <= 8'h0;
+        end else begin
+            // === AW channel: capture write address ===
+            if (PCIE_M_AXI_awvalid && PCIE_M_AXI_awready) begin
+                pcis_wr_base_addr <= PCIE_M_AXI_awaddr[12:0];
+                pcis_wr_len       <= PCIE_M_AXI_awlen;
+                pcis_wr_id        <= PCIE_M_AXI_awid;
+                pcis_aw_active    <= 1'b1;
+                pcis_wr_beat      <= 8'h0;
+            end
+
+            // === W channel: store data into SRAM ===
+            if (pcis_aw_active && PCIE_M_AXI_wvalid) begin
+                for (pcis_wr_byte_idx = 0; pcis_wr_byte_idx < 64; pcis_wr_byte_idx = pcis_wr_byte_idx + 1) begin
+                    if (PCIE_M_AXI_wstrb[pcis_wr_byte_idx])
+                        pcis_mem[((pcis_wr_base_addr + {5'b0, pcis_wr_beat, 6'b0} + pcis_wr_byte_idx) & 13'h1FFF)] <= PCIE_M_AXI_wdata[pcis_wr_byte_idx*8 +: 8];
+                end
+                pcis_wr_beat <= pcis_wr_beat + 8'h1;
+                if (PCIE_M_AXI_wlast) begin
+                    pcis_aw_active <= 1'b0;
+                    pcis_b_pending <= 1'b1;
+                    pcis_b_id_reg  <= pcis_wr_id;
+                end
+            end
+
+            // === B channel: complete write response handshake ===
+            if (pcis_b_pending && PCIE_M_AXI_bready) begin
+                pcis_b_pending <= 1'b0;
+            end
+
+            // === AR channel: capture read address ===
+            if (PCIE_M_AXI_arvalid && PCIE_M_AXI_arready) begin
+                pcis_rd_base_addr <= PCIE_M_AXI_araddr[12:0];
+                pcis_rd_len       <= PCIE_M_AXI_arlen;
+                pcis_rd_id        <= PCIE_M_AXI_arid;
+                pcis_rd_active    <= 1'b1;
+                pcis_rd_beat      <= 8'h0;
+            end
+
+            // === R channel: deliver read data beats ===
+            if (pcis_rd_active && PCIE_M_AXI_rready) begin
+                if (pcis_rd_beat == pcis_rd_len) begin
+                    pcis_rd_active <= 1'b0;
+                end else begin
+                    pcis_rd_beat <= pcis_rd_beat + 8'h1;
+                end
+            end
+        end
+    end
+
+    // Initialize SRAM to zeros
+    integer pcis_init_i;
+    initial begin
+        for (pcis_init_i = 0; pcis_init_i < 8192; pcis_init_i = pcis_init_i + 1)
+            pcis_mem[pcis_init_i] = 8'h0;
+    end
+`endif // SIMULATION
+
     F1Shim firesim_top(
         .clock(sys_clk),
         .reset(!sys_reset_n),
@@ -150,7 +289,37 @@ module overall_fpga_top(
         .io_master_r_bits_id(),
         .io_master_r_bits_user(),
 
+`ifdef SIMULATION
+        // In simulation, SRAM handles PCIE_M_AXI slave signals;
+        // F1Shim io_pcis outputs go to intermediate wires (unused).
+        .io_pcis_aw_ready(pcis_fs_awready),
+        .io_pcis_w_ready(pcis_fs_wready),
+        .io_pcis_b_valid(pcis_fs_bvalid),
+        .io_pcis_b_bits_resp(pcis_fs_bresp),
+        .io_pcis_b_bits_id(pcis_fs_bid),
+        .io_pcis_ar_ready(pcis_fs_arready),
+        .io_pcis_r_valid(pcis_fs_rvalid),
+        .io_pcis_r_bits_data(pcis_fs_rdata),
+        .io_pcis_r_bits_last(pcis_fs_rlast),
+        .io_pcis_r_bits_resp(pcis_fs_rresp),
+        .io_pcis_r_bits_id(pcis_fs_rid),
+`else
         .io_pcis_aw_ready(PCIE_M_AXI_awready),
+        .io_pcis_w_ready(PCIE_M_AXI_wready),
+        .io_pcis_b_valid(PCIE_M_AXI_bvalid),
+        .io_pcis_b_bits_resp(PCIE_M_AXI_bresp),
+        .io_pcis_b_bits_id(PCIE_M_AXI_bid),
+        .io_pcis_ar_ready(PCIE_M_AXI_arready),
+        .io_pcis_r_valid(PCIE_M_AXI_rvalid),
+        .io_pcis_r_bits_data(PCIE_M_AXI_rdata),
+        .io_pcis_r_bits_last(PCIE_M_AXI_rlast),
+        .io_pcis_r_bits_resp(PCIE_M_AXI_rresp),
+        .io_pcis_r_bits_id(PCIE_M_AXI_rid),
+`endif
+        .io_pcis_b_bits_user(),
+        .io_pcis_r_bits_user(),
+
+        // io_pcis inputs: always connected to PCIE_M_AXI master signals
         .io_pcis_aw_valid(PCIE_M_AXI_awvalid),
         .io_pcis_aw_bits_addr({32'b0, PCIE_M_AXI_awaddr[31:0]}), // strip NoC base, keep lower 32 bits
         .io_pcis_aw_bits_len(PCIE_M_AXI_awlen),
@@ -164,7 +333,6 @@ module overall_fpga_top(
         .io_pcis_aw_bits_id({14'b0, PCIE_M_AXI_awid}),
         .io_pcis_aw_bits_user(1'h0),
 
-        .io_pcis_w_ready(PCIE_M_AXI_wready),
         .io_pcis_w_valid(PCIE_M_AXI_wvalid),
         .io_pcis_w_bits_data(PCIE_M_AXI_wdata),
         .io_pcis_w_bits_last(PCIE_M_AXI_wlast),
@@ -173,12 +341,7 @@ module overall_fpga_top(
         .io_pcis_w_bits_user(1'h0),
 
         .io_pcis_b_ready(PCIE_M_AXI_bready),
-        .io_pcis_b_valid(PCIE_M_AXI_bvalid),
-        .io_pcis_b_bits_resp(PCIE_M_AXI_bresp),
-        .io_pcis_b_bits_id(PCIE_M_AXI_bid),
-        .io_pcis_b_bits_user(),
 
-        .io_pcis_ar_ready(PCIE_M_AXI_arready),
         .io_pcis_ar_valid(PCIE_M_AXI_arvalid),
         .io_pcis_ar_bits_addr({32'b0, PCIE_M_AXI_araddr[31:0]}),
         .io_pcis_ar_bits_len(PCIE_M_AXI_arlen),
@@ -193,12 +356,6 @@ module overall_fpga_top(
         .io_pcis_ar_bits_user(1'h0),
 
         .io_pcis_r_ready(PCIE_M_AXI_rready),
-        .io_pcis_r_valid(PCIE_M_AXI_rvalid),
-        .io_pcis_r_bits_resp(PCIE_M_AXI_rresp),
-        .io_pcis_r_bits_data(PCIE_M_AXI_rdata),
-        .io_pcis_r_bits_last(PCIE_M_AXI_rlast),
-        .io_pcis_r_bits_id(PCIE_M_AXI_rid),
-        .io_pcis_r_bits_user(),
 
         .io_slave_0_aw_ready(DDR4_0_S_AXI_awready),
         .io_slave_0_aw_valid(DDR4_0_S_AXI_awvalid),
