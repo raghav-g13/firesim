@@ -1,7 +1,8 @@
 # Block-design net connectivity for the Xilinx Alveo V80 (Versal).
 
 # --- Interface connections ---
-connect_bd_intf_net -intf_net DDR4_0_S_AXI_1 [get_bd_intf_ports DDR4_0_S_AXI] [get_bd_intf_pins axi_noc_1/S00_AXI]
+connect_bd_intf_net -intf_net DDR4_0_S_AXI_1 [get_bd_intf_ports DDR4_0_S_AXI] [get_bd_intf_pins smartconnect_ddr/S00_AXI]
+connect_bd_intf_net -intf_net smartconnect_ddr_M00_AXI [get_bd_intf_pins smartconnect_ddr/M00_AXI] [get_bd_intf_pins axi_noc_1/S00_AXI]
 connect_bd_intf_net -intf_net axi_noc_0_M00_AXI [get_bd_intf_ports PCIE_M_AXI] [get_bd_intf_pins axi_noc_0/M00_AXI]
 connect_bd_intf_net -intf_net axi_noc_0_M01_AXI [get_bd_intf_ports PCIE_M_AXI_LITE] [get_bd_intf_pins smartconnect_0/M00_AXI]
 connect_bd_intf_net -intf_net axi_noc_0_M01_AXI1 [get_bd_intf_pins axi_noc_0/M01_AXI] [get_bd_intf_pins smartconnect_0/S00_AXI]
@@ -15,13 +16,15 @@ connect_bd_intf_net -intf_net versal_cips_0_PCIE0_GT [get_bd_intf_ports pci_expr
 connect_bd_net -net proc_sys_reset_0_interconnect_aresetn  [get_bd_pins proc_sys_reset_0/interconnect_aresetn] \
   [get_bd_ports sys_reset_n] \
   [get_bd_pins versal_cips_0/dma0_intrfc_resetn] \
-  [get_bd_pins smartconnect_0/aresetn]
+  [get_bd_pins smartconnect_0/aresetn] \
+  [get_bd_pins smartconnect_ddr/aresetn]
 connect_bd_net -net sys_clk_net  [get_bd_pins clk_wizard_0/clk_out1] \
   [get_bd_pins proc_sys_reset_0/slowest_sync_clk] \
   [get_bd_pins axi_noc_1/aclk0] \
   [get_bd_pins axi_noc_0/aclk1] \
   [get_bd_pins versal_cips_0/dma0_intrfc_clk] \
   [get_bd_pins smartconnect_0/aclk] \
+  [get_bd_pins smartconnect_ddr/aclk] \
   [get_bd_pins axi_noc_0/aclk2] \
   [get_bd_ports sys_clk]
 connect_bd_net -net versal_cips_0_cpm_pcie_noc_axi0_clk  [get_bd_pins versal_cips_0/cpm_pcie_noc_axi0_clk] \

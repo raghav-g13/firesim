@@ -36,14 +36,12 @@ module overall_fpga_top(
     `define AMBA_AXI_CACHE
     `define AMBA_AXI_PROT
     `define AMBA_AXI_QOS
-    `define AMBA_AXI_REGION
     `define AMBA_AXI_ID
     `AMBA_AXI_WIRE(DDR4_0_S_AXI, 16, 64, 64)
     `undef AMBA_AXI4
     `undef AMBA_AXI_CACHE
     `undef AMBA_AXI_PROT
     `undef AMBA_AXI_QOS
-    `undef AMBA_AXI_REGION
     `undef AMBA_AXI_ID
 
     // F1Shim generates zero-based DDR addresses; NoC DDR_CH2 base is 0x600_0000_0000
@@ -65,14 +63,12 @@ module overall_fpga_top(
 	`define AMBA_AXI_CACHE
 	`define AMBA_AXI_PROT
 	`define AMBA_AXI_QOS
-	`define AMBA_AXI_REGION
 	`define AMBA_AXI_ID
 	`AMBA_AXI_PORT_CONNECTION(DDR4_0_S_AXI, DDR4_0_S_AXI)
 	`undef AMBA_AXI4
 	`undef AMBA_AXI_CACHE
 	`undef AMBA_AXI_PROT
 	`undef AMBA_AXI_QOS
-	`undef AMBA_AXI_REGION
 	`undef AMBA_AXI_ID
 
 	`define AMBA_AXI4

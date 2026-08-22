@@ -86,6 +86,8 @@ set_property -dict [ list \
    CONFIG.CATEGORY {pl} \
 ] [get_bd_intf_pins /axi_noc_0/M01_AXI]
 
+# TODO: when QDMA DMA is enabled, bump M00_AXI QoS to match PCIe Gen4 x16 traffic:
+#   M00_AXI {read_bw {12000} write_bw {12000} read_avg_burst {64} write_avg_burst {64}}
 set_property -dict [ list \
    CONFIG.CONNECTIONS {M01_AXI {read_bw {500} write_bw {500} read_avg_burst {4} write_avg_burst {4}} M00_AXI {read_bw {1720} write_bw {1720} read_avg_burst {4} write_avg_burst {4}}} \
    CONFIG.DEST_IDS {M01_AXI:0x40:M00_AXI:0xc0} \
@@ -131,7 +133,7 @@ set_property -dict [list \
 
 
 set_property -dict [ list \
-   CONFIG.CONNECTIONS {MC_0 {read_bw {500} write_bw {500} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {MC_0 {read_bw {2000} write_bw {2000} read_avg_burst {32} write_avg_burst {32}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
 ] [get_bd_intf_pins /axi_noc_1/S00_AXI]
@@ -139,6 +141,16 @@ set_property -dict [ list \
 set_property -dict [ list \
    CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
 ] [get_bd_pins /axi_noc_1/aclk0]
+
+# Create instance: smartconnect_ddr, and set properties
+# Buffers DDR writes to prevent LoadMem backpressure from stalling the MMIO bus
+set smartconnect_ddr [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_ddr ]
+set_property -dict [list \
+    CONFIG.NUM_CLKS {1} \
+    CONFIG.NUM_SI {1} \
+    CONFIG.NUM_MI {1} \
+    CONFIG.HAS_ARESETN {1} \
+] $smartconnect_ddr
 
 # Create instance: smartconnect_0, and set properties
 set smartconnect_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_0 ]
