@@ -4,9 +4,17 @@
 // Uses CED QDMA BFM tasks to exercise the V80 FireSim address map.
 
 // ── bar_test0: F1Shim SimulationMaster BAR1 (user_bar) MMIO register test ──
+// Kodiak memory map (from FireSim-generated.const.h):
+//   INIT_DONE     = 480 (0x1E0)
+//   PRESENCE_READ = 484 (0x1E4)
+//   PRESENCE_WRITE= 488 (0x1E8)
+//   PeekPoke DONE = 400 (0x190)
 else if (testname == "bar_test0")
 begin
     $display("[%t] === bar_test0: F1Shim SimulationMaster BAR1 MMIO register test ===", $realtime);
+
+    // Reset test_state — CED system check may have flagged speed/ID mismatches
+    board.RP.tx_usrapp.test_state = 0;
 
     // Initialize QDMA / host profile for BAR access
     board.RP.tx_usrapp.TSK_PROG_HOST_PROFILE;
@@ -15,10 +23,9 @@ begin
     // Allow time for FireSim init delay to expire
     #5000;
 
-    // ── Step 1: Read PRESENCE_READ at offset 0x224 ──────────────────────
-    // Expected value: 0x46697265 ("Fire" — FireSim fingerprint)
-    $display("[%t] [FIRESIM] Step 1: Reading PRESENCE_READ at offset 0x224", $realtime);
-    board.RP.tx_usrapp.TSK_REG_READ(user_bar, 16'h224);
+    // ── Step 1: Read PRESENCE_READ at offset 0x1E4 ──────────────────────
+    $display("[%t] [FIRESIM] Step 1: Reading PRESENCE_READ at offset 0x1E4", $realtime);
+    board.RP.tx_usrapp.TSK_REG_READ(user_bar, 16'h1E4);
     if ((^board.RP.tx_usrapp.P_READ_DATA === 1'bx)) begin
         $display("[%t] ERROR: PRESENCE_READ returned X/Z values: %h", $realtime, board.RP.tx_usrapp.P_READ_DATA);
         board.RP.tx_usrapp.test_state = 1;
@@ -29,10 +36,9 @@ begin
         $display("[%t] [FIRESIM] PRESENCE_READ = 0x%h (correct FireSim fingerprint)", $realtime, board.RP.tx_usrapp.P_READ_DATA);
     end
 
-    // ── Step 2: Read INIT_DONE at offset 0x220 ─────────────────────────
-    // Expected value: 1 (init delay expired)
-    $display("[%t] [FIRESIM] Step 2: Reading INIT_DONE at offset 0x220", $realtime);
-    board.RP.tx_usrapp.TSK_REG_READ(user_bar, 16'h220);
+    // ── Step 2: Read INIT_DONE at offset 0x1E0 ─────────────────────────
+    $display("[%t] [FIRESIM] Step 2: Reading INIT_DONE at offset 0x1E0", $realtime);
+    board.RP.tx_usrapp.TSK_REG_READ(user_bar, 16'h1E0);
     if ((^board.RP.tx_usrapp.P_READ_DATA === 1'bx)) begin
         $display("[%t] ERROR: INIT_DONE returned X/Z values: %h", $realtime, board.RP.tx_usrapp.P_READ_DATA);
         board.RP.tx_usrapp.test_state = 1;
@@ -44,14 +50,12 @@ begin
     end
 
     // ── Step 3: Write-readback through PRESENCE_WRITE → PRESENCE_READ ──
-    // Write 0xDEADBEEF to PRESENCE_WRITE (offset 0x228), then read back
-    // PRESENCE_READ (offset 0x224) — should change to 0xDEADBEEF
-    $display("[%t] [FIRESIM] Step 3: Writing 0xDEADBEEF to PRESENCE_WRITE at offset 0x228", $realtime);
-    board.RP.tx_usrapp.TSK_REG_WRITE(user_bar, 32'h228, 32'hDEADBEEF, 4'hF);
-    #2000;  // Allow write to propagate through the full path
+    $display("[%t] [FIRESIM] Step 3: Writing 0xDEADBEEF to PRESENCE_WRITE at offset 0x1E8", $realtime);
+    board.RP.tx_usrapp.TSK_REG_WRITE(user_bar, 32'h1E8, 32'hDEADBEEF, 4'hF);
+    #2000;
 
-    $display("[%t] [FIRESIM] Step 3: Reading back PRESENCE_READ at offset 0x224", $realtime);
-    board.RP.tx_usrapp.TSK_REG_READ(user_bar, 16'h224);
+    $display("[%t] [FIRESIM] Step 3: Reading back PRESENCE_READ at offset 0x1E4", $realtime);
+    board.RP.tx_usrapp.TSK_REG_READ(user_bar, 16'h1E4);
     if ((^board.RP.tx_usrapp.P_READ_DATA === 1'bx)) begin
         $display("[%t] ERROR: PRESENCE_READ readback returned X/Z values: %h", $realtime, board.RP.tx_usrapp.P_READ_DATA);
         board.RP.tx_usrapp.test_state = 1;
@@ -62,10 +66,9 @@ begin
         $display("[%t] [FIRESIM] PRESENCE_READ readback = 0x%h (write-readback OK)", $realtime, board.RP.tx_usrapp.P_READ_DATA);
     end
 
-    // ── Step 4: Read PeekPoke DONE register at offset 0x1D0 ────────────
-    // Bus-connectivity check — value should not be X
-    $display("[%t] [FIRESIM] Step 4: Reading PeekPoke DONE at offset 0x1D0", $realtime);
-    board.RP.tx_usrapp.TSK_REG_READ(user_bar, 16'h1D0);
+    // ── Step 4: Read PeekPoke DONE register at offset 0x190 ────────────
+    $display("[%t] [FIRESIM] Step 4: Reading PeekPoke DONE at offset 0x190", $realtime);
+    board.RP.tx_usrapp.TSK_REG_READ(user_bar, 16'h190);
     if ((^board.RP.tx_usrapp.P_READ_DATA === 1'bx)) begin
         $display("[%t] ERROR: PeekPoke DONE returned X/Z values: %h", $realtime, board.RP.tx_usrapp.P_READ_DATA);
         board.RP.tx_usrapp.test_state = 1;

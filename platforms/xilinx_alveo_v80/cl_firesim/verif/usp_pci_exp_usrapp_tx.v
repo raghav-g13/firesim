@@ -9260,7 +9260,6 @@ task TSK_FIND_USR_BAR;
 	6'b100000 : user_bar =5;
 	default : user_bar = 0;
       endcase // case (P_READ_DATA[5:0])
-      user_bar = 2;
       pidx_bar = 4;
       $display (" ***** User BAR = %d *****\n", user_bar);
    end
