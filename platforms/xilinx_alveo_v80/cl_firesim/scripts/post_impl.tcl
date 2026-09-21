@@ -21,9 +21,3 @@ close_design
 set firesim_pdi_path ${root_dir}/vivado_proj/firesim.pdi
 
 file copy -force ${root_dir}/vivado_proj/firesim.runs/${impl_run}/${top_level_name}.pdi ${firesim_pdi_path}
-
-# Copy as firesim.bit for manager compatibility
-file copy -force ${firesim_pdi_path} ${root_dir}/vivado_proj/firesim.bit
-
-# Create empty firesim.mcs placeholder
-close [open ${root_dir}/vivado_proj/firesim.mcs w]
