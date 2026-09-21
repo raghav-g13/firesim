@@ -15,7 +15,11 @@
 #   2. Compiled Xilinx VCS sim libs at ../vcs_xilinx_lib/ (built with VCS W-2024.09-1)
 #
 # Usage:
-#   bash run_vip_metasim.sh [compile|elaborate|simulate|all] [CL_DIR] [+TESTNAME=...]
+#   bash run_vip_metasim.sh [compile|elaborate|simulate|driver|all] [CL_DIR] [+TESTNAME=...]
+#
+# The 'driver' step runs the VCS simulation with +TESTNAME=driver_test and
+# launches the FireSim driver, connected via named-pipe FIFOs. Pass driver
+# plusargs (+permissive, +prog0=, etc.) after the step name.
 
 set -euo pipefail
 
@@ -75,10 +79,13 @@ CL_DIR=""
 TESTNAME_ARG=""
 TESTNAME_VALUE=""
 
+DRIVER_ARGS=()
+
 for arg in "$@"; do
     case "$arg" in
-        compile|elaborate|simulate|all) STEP="$arg" ;;
+        compile|elaborate|simulate|driver|all) STEP="$arg" ;;
         +TESTNAME=*) TESTNAME_ARG="$arg"; TESTNAME_VALUE="${arg#+TESTNAME=}" ;;
+        +permissive*|+domain=*|+bus=*|+device=*|+function=*|+bar=*|+pci-vendor=*|+pci-device=*|+check-fingerprint|+prog0=*|+fesvr-step-size=*|+fesvr-wait-ticks=*|+fesvr-enable-early-fast|+dump_*) DRIVER_ARGS+=("$arg") ;;
         *) CL_DIR="$arg" ;;
     esac
 done
@@ -173,6 +180,11 @@ patch_exported_sh() {
         sed -i 's/vcs_elab_opts="-full64 -debug_acc -t ps -licqueue -l elaborate.log"/vcs_elab_opts="-full64 -debug_acc -t ps -licqueue -l elaborate.log +error+999 -xlrm uniq_prior_final"/' "$EXPORTED_SH"
         echo "  Added +error+999 -xlrm uniq_prior_final"
     else echo "  VCS elaborate flags already present"; fi
+
+    if ! grep -q '+define+RANDOMIZE_REG_INIT' "$EXPORTED_SH"; then
+        sed -i 's/+define+SIMULATION=/+define+SIMULATION= +define+RANDOMIZE_REG_INIT +define+RANDOMIZE_MEM_INIT +define+RANDOM=0/g' "$EXPORTED_SH"
+        echo "  Added RANDOMIZE defines (REG_INIT, MEM_INIT, RANDOM=0)"
+    else echo "  RANDOMIZE defines already present"; fi
     echo ""
 }
 
@@ -234,8 +246,8 @@ print(f'  CDO [{\"exported\" if \"vcs_vip\" in \"$cdo_file\" else \"source\"}]: 
 }
 
 # ── Common vlogan options for extra compile steps ────────────────────
-VLOGAN_SV_OPTS="-full64 -l .tmp_log -Xcheck_p1800_2009=char -sverilog +define+SIMULATION= +define+FIRESIM_EP="
-VLOGAN_V2K_OPTS="-full64 -l .tmp_log -Xcheck_p1800_2009=char +v2k +define+SIMULATION= +define+FIRESIM_EP="
+VLOGAN_SV_OPTS="-full64 -l .tmp_log -Xcheck_p1800_2009=char -sverilog +define+SIMULATION= +define+FIRESIM_EP= +define+RANDOMIZE_REG_INIT +define+RANDOMIZE_MEM_INIT +define+RANDOM=0"
+VLOGAN_V2K_OPTS="-full64 -l .tmp_log -Xcheck_p1800_2009=char +v2k +define+SIMULATION= +define+FIRESIM_EP= +define+RANDOMIZE_REG_INIT +define+RANDOMIZE_MEM_INIT +define+RANDOM=0"
 
 # Common include dirs (covers design_1, design_rp, CED, xlnoc, FireSim)
 COMMON_INCDIRS=(
@@ -351,6 +363,13 @@ compile_ced_sim() {
 }
 
 # ── Compile testbench ────────────────────────────────────────────────
+compile_driver_dpi() {
+    echo "=== Compiling driver DPI bridge ==="
+    vlogan_sv "$SCRIPT_DIR/driver_bridge.sv"
+    echo "  driver_bridge.sv compilation complete"
+    echo ""
+}
+
 compile_testbench() {
     echo "=== Compiling VIP testbench ==="
     vlogan_v2k "+incdir+$VERIF_DIR" "+incdir+$CED_SIM" "+incdir+$CL_DIR/design" "+incdir+$SCRIPT_DIR" \
@@ -407,14 +426,15 @@ do_compile() {
     echo "=== Step 1: EP compile (Vivado-exported) ==="
     fix_sim_lib_paths
     patch_exported_sh
-    # EP link patching disabled — RP was reconfigured to x8 Gen3 via Vivado
+    # Both EP and RP now x16 — no link width patching needed
     # patch_ep_link_to_x8
     bash overall_fpga_top_sim_wrapper.sh -step compile 2>&1 | tee ep_compile.log
     echo ""
 
-    echo "=== Step 2: RP + CED + testbench compile ==="
+    echo "=== Step 2: RP + CED + DPI + testbench compile ==="
     compile_design_rp
     compile_ced_sim
+    compile_driver_dpi
     compile_testbench
     echo "=== Compile complete ==="
     echo ""
@@ -423,7 +443,9 @@ do_compile() {
 do_elaborate() {
     echo "=== Elaborate (top=board) ==="
     local elab_opts="-full64 -debug_acc -t ps -licqueue -l elaborate.log +error+999 -xlrm uniq_prior_final"
-    vcs $elab_opts xil_defaultlib.board xil_defaultlib.glbl -o board_simv 2>&1 | tee elaborate_full.log
+    vcs $elab_opts xil_defaultlib.board xil_defaultlib.glbl \
+        "$SCRIPT_DIR/driver_dpi.c" \
+        -o board_simv 2>&1 | tee elaborate_full.log
     local rc=${PIPESTATUS[0]}
     if [[ -f "board_simv" ]]; then
         echo "SUCCESS: board_simv binary produced"
@@ -467,10 +489,186 @@ do_simulate() {
     return $RC
 }
 
+# ── Build driver with VCS backend ────────────────────────────────────
+KODIAK_OUTPUT="$FIRESIM_DIR/sim/output/xilinx_alveo_v80/xilinx_alveo_v80-firesim-FireSim-FireSimKodiakConfig-BaseXilinxAlveoV80Config"
+GENERATED_DIR="$FIRESIM_DIR/sim/generated-src/xilinx_alveo_v80/xilinx_alveo_v80-firesim-FireSim-FireSimKodiakConfig-BaseXilinxAlveoV80Config"
+SIMIF_DIR="$FIRESIM_DIR/sim/midas/src/main/cc"
+DRIVER_BIN="$VCS_SIM_DIR/FireSim-xilinx_alveo_v80-vcs"
+
+CHIPYARD_DIR="$FIRESIM_DIR/../.."
+FIRECHIP_DIR="$CHIPYARD_DIR/generators/firechip"
+TESTCHIPIP_CSRC="$CHIPYARD_DIR/generators/testchipip/src/main/resources/testchipip/csrc"
+
+do_build_driver() {
+    echo "=== Building FireSim driver (VCS FIFO backend) ==="
+
+    local hw_build="$KODIAK_OUTPUT/build"
+    if [[ ! -f "$hw_build/FireSim-generated.const.h" ]]; then
+        echo "ERROR: $hw_build/FireSim-generated.const.h not found"
+        echo "Build the Kodiak driver first."
+        exit 1
+    fi
+
+    local DRIVER_CC=(
+        "$TESTCHIPIP_CSRC/cospike_impl.cc"
+        "$TESTCHIPIP_CSRC/testchip_tsi.cc"
+        "$TESTCHIPIP_CSRC/testchip_dtm.cc"
+        "$TESTCHIPIP_CSRC/testchip_htif.cc"
+        "$FIRECHIP_DIR/bridgestubs/src/main/cc/fesvr/firesim_tsi.cc"
+        "$FIRECHIP_DIR/bridgestubs/src/main/cc/fesvr/firesim_dtm.cc"
+        "$RISCV/lib/libfesvr.a"
+        "$FIRECHIP_DIR/chip/src/main/cc/firesim/firesim_top.cc"
+    )
+    for f in "$FIRECHIP_DIR"/bridgestubs/src/main/cc/bridges/*.cc \
+             "$FIRECHIP_DIR"/bridgestubs/src/main/cc/bridges/tracerv/*.cc \
+             "$FIRECHIP_DIR"/bridgestubs/src/main/cc/bridges/cospike/*.cc; do
+        [[ -f "$f" ]] && DRIVER_CC+=("$f")
+    done
+
+    export CXXFLAGS="-Wall -std=c++20 -O2 -g -DFIRESIM \
+        -isystem $TESTCHIPIP_CSRC \
+        -isystem $RISCV/include \
+        -Wno-unused-variable \
+        -I$FIRECHIP_DIR/bridgestubs/src/main/cc \
+        -I$FIRECHIP_DIR/bridgestubs/src/main/cc/bridge \
+        -I$FIRECHIP_DIR/bridgestubs/src/main/cc/bridge/tracerv \
+        -I$FIRECHIP_DIR/bridgestubs/src/main/cc/bridge/cospike \
+        -I$FIRECHIP_DIR/bridgestubs/src/main/cc/bridge/test \
+        -I$GENERATED_DIR"
+    export LDFLAGS="-L$RISCV/lib -Wl,-rpath,$RISCV/lib -lriscv -l:libdwarf.so -l:libelf.so -lz"
+
+    make -C "$SIMIF_DIR" driver \
+        MAIN=xilinx_alveo_v80_vcs \
+        PLATFORM=xilinx_alveo_v80 \
+        DRIVER_NAME=FireSim \
+        GEN_FILE_BASENAME=FireSim-generated \
+        GEN_DIR="$hw_build" \
+        OUT_DIR="$VCS_SIM_DIR" \
+        DRIVER="${DRIVER_CC[*]}" 2>&1 | tee "$VCS_SIM_DIR/driver_build.log"
+    local rc=${PIPESTATUS[0]}
+
+    if [[ -f "$VCS_SIM_DIR/FireSim-xilinx_alveo_v80" ]]; then
+        mv "$VCS_SIM_DIR/FireSim-xilinx_alveo_v80" "$DRIVER_BIN"
+    fi
+
+    if [[ -f "$DRIVER_BIN" ]]; then
+        echo "  Driver binary: $DRIVER_BIN"
+        ls -la "$DRIVER_BIN"
+    elif [[ $rc -ne 0 ]]; then
+        echo "ERROR: Driver build failed (rc=$rc). See $VCS_SIM_DIR/driver_build.log"
+        exit 1
+    fi
+    echo ""
+}
+
+# ── Launch driver_test: VCS sim + driver ────────────────────────────
+do_driver_test() {
+    echo "=== driver_test: VCS simulation + FireSim driver ==="
+
+    if [[ ! -f "board_simv" ]]; then
+        echo "ERROR: board_simv not found. Run compile+elaborate first."
+        exit 1
+    fi
+    if [[ ! -f "$DRIVER_BIN" ]]; then
+        echo "  Driver not found, building..."
+        do_build_driver
+    fi
+
+    rm -f /tmp/driver_to_vcs /tmp/vcs_to_driver
+
+    # Default fesvr args for metasim: small step_size and minimal wait_ticks
+    # so binary loading starts quickly (default 2M step × 9 ticks = ~19h wall time)
+    local has_step_size=false has_wait_ticks=false
+    for a in "${DRIVER_ARGS[@]+"${DRIVER_ARGS[@]}"}"; do
+        [[ "$a" == +fesvr-step-size=* ]] && has_step_size=true
+        [[ "$a" == +fesvr-wait-ticks=* ]] && has_wait_ticks=true
+    done
+    if ! $has_step_size; then
+        DRIVER_ARGS+=("+fesvr-step-size=10000")
+        echo "  (defaulting +fesvr-step-size=10000 for metasim)"
+    fi
+    if ! $has_wait_ticks; then
+        DRIVER_ARGS+=("+fesvr-wait-ticks=2")
+        echo "  (defaulting +fesvr-wait-ticks=2 for metasim)"
+    fi
+
+    # Collect VCS-side plusargs (dump options)
+    local VCS_EXTRA_ARGS=()
+    for a in "${DRIVER_ARGS[@]+"${DRIVER_ARGS[@]}"}"; do
+        [[ "$a" == +dump_* ]] && VCS_EXTRA_ARGS+=("$a")
+    done
+
+    echo ""
+    echo "=== Starting VCS simulation (driver_test) ==="
+    echo "Running: ./board_simv -licqueue -l simulate.log +TESTNAME=driver_test ${VCS_EXTRA_ARGS[*]+${VCS_EXTRA_ARGS[*]}}"
+    ./board_simv -licqueue -l simulate.log +TESTNAME=driver_test ${VCS_EXTRA_ARGS[@]+"${VCS_EXTRA_ARGS[@]}"} 2>&1 | tee simulate_full.log &
+    local VCS_PID=$!
+    echo "  VCS PID: $VCS_PID"
+
+    echo ""
+    echo "=== Waiting for VCS DPI bridge to create FIFO ==="
+    local wait_count=0
+    while [[ ! -p /tmp/vcs_to_driver ]] && kill -0 $VCS_PID 2>/dev/null; do
+        sleep 1
+        wait_count=$((wait_count + 1))
+        if [[ $((wait_count % 10)) -eq 0 ]]; then
+            echo "  Still waiting for VCS to reach driver_test ($wait_count s)..."
+        fi
+    done
+
+    if ! kill -0 $VCS_PID 2>/dev/null; then
+        echo "ERROR: VCS exited before reaching driver_test"
+        wait $VCS_PID
+        exit 1
+    fi
+
+    # Filter out VCS-only plusargs (+dump_*) from driver args
+    local DRIVER_ONLY_ARGS=()
+    for a in "${DRIVER_ARGS[@]+"${DRIVER_ARGS[@]}"}"; do
+        [[ "$a" != +dump_* ]] && DRIVER_ONLY_ARGS+=("$a")
+    done
+
+    echo ""
+    echo "=== Starting FireSim driver ==="
+    echo "Running: $DRIVER_BIN ${DRIVER_ONLY_ARGS[*]+${DRIVER_ONLY_ARGS[*]}}"
+    "$DRIVER_BIN" ${DRIVER_ONLY_ARGS[@]+"${DRIVER_ONLY_ARGS[@]}"}
+    local DRIVER_RC=$?
+    echo "  Driver exited with rc=$DRIVER_RC"
+
+    echo ""
+    echo "=== Waiting for VCS to finish ==="
+    wait $VCS_PID
+    local VCS_RC=$?
+    echo "  VCS exited with rc=$VCS_RC"
+
+    rm -f /tmp/driver_to_vcs /tmp/vcs_to_driver
+
+    local logfile="simulate.log"
+    [[ ! -f "$logfile" ]] && logfile="simulate_full.log"
+    if [[ -f "$logfile" ]]; then
+        echo ""
+        echo "=== Simulation Summary ==="
+        grep -q "CDO programming done" "$logfile" 2>/dev/null && echo "  CDO programming completed"
+        grep -qi 'user_lnk_up.*=.*1' "$logfile" 2>/dev/null && echo "  PCIe link-up achieved"
+        grep -q 'Driver connected' "$logfile" 2>/dev/null && echo "  Driver connected to VCS"
+        grep -q 'driver_test PASSED' "$logfile" 2>/dev/null && echo "  driver_test PASSED"
+        grep -q 'ERROR: driver_test FAILED' "$logfile" 2>/dev/null && echo "  driver_test FAILED"
+        local cmd_count
+        cmd_count=$(grep -o 'after [0-9]* commands' "$logfile" 2>/dev/null | head -1)
+        [[ -n "$cmd_count" ]] && echo "  Driver bridge: $cmd_count"
+    fi
+
+    if [[ $DRIVER_RC -ne 0 ]]; then
+        return $DRIVER_RC
+    fi
+    return $VCS_RC
+}
+
 case "$STEP" in
     compile)   do_compile ;;
     elaborate) do_elaborate ;;
     simulate)  do_simulate; exit $? ;;
+    driver)    do_driver_test; exit $? ;;
     all)
         do_compile
         do_elaborate
