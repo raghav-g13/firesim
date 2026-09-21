@@ -1463,79 +1463,92 @@ class XilinxAlveoV80InstanceDeployManager(XilinxAlveoInstanceDeployManager):
         return (bus << 12) | (device << 4) | function
 
     def load_qdma(self) -> None:
-        """Load the QDMA-PF kernel module and set up MM queues for each FPGA slot."""
+        """Load QDMA-PF and set up MM queues.
+
+        TODO(V80-QDMA): QDMA DMA datapath is not connected in the current
+        block design (no NoC route for io_pcis).  The driver's remove()
+        callback hangs on this bitstream, and the C++ driver uses BAR1 MMIO
+        via sysfs instead.  Uncomment when the DMA datapath is connected.
+        """
         if self.instance_assigned_simulations():
-            # Load qdma-pf module if not already loaded
-            if run("lsmod | grep -wq qdma_pf", warn_only=True).return_code != 0:
-                self.instance_logger("Loading QDMA-PF Driver Kernel Module.")
-                run("sudo modprobe qdma-pf", shell=True)
-            else:
-                self.instance_logger("QDMA-PF Driver Kernel Module already loaded.")
-
-            json_db = self.parent_node.get_fpga_db()
-            collect = run(f"cat {json_db}")
-            db = json.loads(collect)
-
-            for slotno in range(len(self.parent_node.sim_slots)):
-                assert slotno < len(db), \
-                    f"Less FPGAs available than slots ({slotno} >= {len(db)})"
-                bdf_str = db[slotno]["bdf"]
-                qdma_bdf = self._compute_qdma_bdf(bdf_str)
-
-                self.instance_logger(
-                    f"Setting up QDMA queue for slot {slotno} "
-                    f"(BDF: {bdf_str}, QDMA BDF: {qdma_bdf:05x})"
-                )
-
-                # Set qmax for this device
-                run(f"echo 512 | sudo tee /sys/bus/pci/devices/0000:{bdf_str}/qdma/qmax")
-
-                # Add MM queue 0 bidirectional
-                run(f"dma-ctl qdma{qdma_bdf:05x} q add idx 0 mode mm dir bi")
-
-                # Start MM queue 0 bidirectional
-                run(f"dma-ctl qdma{qdma_bdf:05x} q start idx 0 dir bi")
-
-            # Set permissions on QDMA device nodes
-            run("sudo chmod 666 /dev/qdma*", shell=True)
+            self.instance_logger("V80: QDMA unsupported — skipping load.")
+            # # Load qdma-pf module if not already loaded
+            # if run("lsmod | grep -wq qdma_pf", warn_only=True).return_code != 0:
+            #     self.instance_logger("Loading QDMA-PF Driver Kernel Module.")
+            #     run("sudo modprobe qdma-pf")
+            # else:
+            #     self.instance_logger("QDMA-PF Driver Kernel Module already loaded.")
+            #
+            # json_db = self.parent_node.get_fpga_db()
+            # collect = run(f"cat {json_db}")
+            # db = json.loads(collect)
+            #
+            # for slotno in range(len(self.parent_node.sim_slots)):
+            #     assert slotno < len(db), \
+            #         f"Less FPGAs available than slots ({slotno} >= {len(db)})"
+            #     bdf_str = db[slotno]["bdf"]
+            #     qdma_bdf = self._compute_qdma_bdf(bdf_str)
+            #
+            #     self.instance_logger(
+            #         f"Setting up QDMA queue for slot {slotno} "
+            #         f"(BDF: {bdf_str}, QDMA BDF: {qdma_bdf:05x})"
+            #     )
+            #
+            #     # Set qmax for this device
+            #     run(f"echo 512 | sudo tee /sys/bus/pci/devices/0000:{bdf_str}/qdma/qmax")
+            #
+            #     # Add MM queue 0 bidirectional
+            #     run(f"dma-ctl qdma{qdma_bdf:05x} q add idx 0 mode mm dir bi")
+            #
+            #     # Start MM queue 0 bidirectional
+            #     run(f"dma-ctl qdma{qdma_bdf:05x} q start idx 0 dir bi")
+            #
+            # # Set permissions on QDMA device nodes
+            # run("sudo chmod 666 /dev/qdma*", shell=True)
 
     def unload_qdma(self) -> None:
-        """Tear down QDMA queues and unload the QDMA-PF kernel module."""
+        """Tear down QDMA queues and unload QDMA-PF.
+
+        TODO(V80-QDMA): Uncomment when the DMA datapath is connected.
+        """
         if self.instance_assigned_simulations():
-            if run("lsmod | grep -wq qdma_pf", warn_only=True).return_code == 0:
-                json_db = self.parent_node.get_fpga_db()
-                collect = run(f"cat {json_db}")
-                db = json.loads(collect)
-
-                for slotno in range(len(self.parent_node.sim_slots)):
-                    if slotno >= len(db):
-                        break
-                    bdf_str = db[slotno]["bdf"]
-                    qdma_bdf = self._compute_qdma_bdf(bdf_str)
-
-                    self.instance_logger(
-                        f"Tearing down QDMA queue for slot {slotno} "
-                        f"(QDMA BDF: {qdma_bdf:05x})"
-                    )
-
-                    # Stop and delete queue (warn_only since queues might not exist)
-                    with warn_only():
-                        run(f"dma-ctl qdma{qdma_bdf:05x} q stop idx 0 dir bi")
-                    with warn_only():
-                        run(f"dma-ctl qdma{qdma_bdf:05x} q del idx 0 dir bi")
-
-                self.instance_logger("Unloading QDMA-PF Driver Kernel Module.")
-                run("sudo modprobe -r qdma-pf")
-            else:
-                self.instance_logger("QDMA-PF Driver Kernel Module already unloaded.")
+            self.instance_logger("V80: QDMA unsupported — skipping unload.")
+            # if run("lsmod | grep -wq qdma_pf", warn_only=True).return_code == 0:
+            #     json_db = self.parent_node.get_fpga_db()
+            #     collect = run(f"cat {json_db}")
+            #     db = json.loads(collect)
+            #
+            #     for slotno in range(len(self.parent_node.sim_slots)):
+            #         if slotno >= len(db):
+            #             break
+            #         bdf_str = db[slotno]["bdf"]
+            #         qdma_bdf = self._compute_qdma_bdf(bdf_str)
+            #
+            #         self.instance_logger(
+            #             f"Tearing down QDMA queue for slot {slotno} "
+            #             f"(QDMA BDF: {qdma_bdf:05x})"
+            #         )
+            #
+            #         with warn_only():
+            #             run(f"dma-ctl qdma{qdma_bdf:05x} q stop idx 0 dir bi")
+            #         with warn_only():
+            #             run(f"dma-ctl qdma{qdma_bdf:05x} q del idx 0 dir bi")
+            #
+            #     self.instance_logger("Unloading QDMA-PF Driver Kernel Module.")
+            #     run("sudo modprobe -r qdma-pf")
+            # else:
+            #     self.instance_logger("QDMA-PF Driver Kernel Module already unloaded.")
 
     def flash_fpgas(self) -> None:
-        """Program V80 FPGAs with PDI and handle PCIe re-enumeration.
+        """Program V80 FPGAs via Vivado JTAG.
 
-        Versal full-bitstream PDI programming resets the SoC and drops the
-        PCIe link.  Instead of per-BDF reconnect (which assumes the BDF is
-        stable), we do a full PCIe bus rescan after programming and wait for
-        the link to re-train.
+        TODO(V80-QDMA): When QDMA is supported, add PCIe disconnect before
+        programming and proper reconnect/rescan after.  Currently skipped
+        because the loaded qdma-pf driver's probe hangs during bus rescan
+        on the current block design (DMA datapath not connected).
+
+        Recovery: after programming the Versal resets and the PCIe link
+        drops.  We call firesim-v80-pcie-rescan.sh to bring it back.
         """
         if self.instance_assigned_simulations():
             self.instance_logger("Flash all FPGA Slots (V80 PDI programming).")
@@ -1556,7 +1569,7 @@ class XilinxAlveoV80InstanceDeployManager(XilinxAlveoInstanceDeployManager):
                 bitstream_tar_unpack_dir = os.path.join(
                     remote_sim_dir, str(self.PLATFORM_NAME)
                 )
-                bit = os.path.join(bitstream_tar_unpack_dir, "firesim.bit")
+                pdi = os.path.join(bitstream_tar_unpack_dir, "firesim.pdi")
 
                 run(f"rm -rf {bitstream_tar_unpack_dir}")
                 run(f"tar xvf {remote_sim_dir}/{bitstream_tar} -C {remote_sim_dir}")
@@ -1572,75 +1585,31 @@ class XilinxAlveoV80InstanceDeployManager(XilinxAlveoInstanceDeployManager):
                     rootLogger.debug(rsync_cap)
                     rootLogger.debug(rsync_cap.stderr)
                     scripts_synced = True
-                    scripts_dir = f"{remote_sim_dir}/scripts"
 
                 assert slotno < len(db), \
                     f"Less FPGAs than slots ({slotno} >= {len(db)})"
                 uid = db[slotno]["uid"]
-                self.instance_logger(f"Slot {slotno}: {uid} -> {bit}")
-                mapping_lines.append(f"{uid} {bit}")
+                self.instance_logger(f"Slot {slotno}: {uid} -> {pdi}")
+                mapping_lines.append(f"{uid} {pdi}")
 
-            fpga_util = f"{script_path}/firesim-fpga-util.py"
-            check_script(
-                fpga_util,
-                Path(f"{get_deploy_dir()}/../platforms/{self.PLATFORM_NAME}/scripts"),
-            )
-
-            # Step 1: Disconnect all FPGAs from PCI bus
-            self.instance_logger("Disconnecting all FPGAs from PCI bus.")
-            for slotno in range(len(self.parent_node.sim_slots)):
-                bdf = db[slotno]["bdf"]
-                run(f"{fpga_util} --bdf {bdf} --disconnect-bdf --fpga-db {json_db}")
-
-            # Step 2: Program all FPGAs via Vivado batch
+            # Program via Vivado JTAG (no PCIe disconnect/reconnect)
             map_file = f"{self.get_remote_sim_dir_for_slot(0)}/flash_map.txt"
             map_content = "\n".join(mapping_lines)
             run(f"cat > {map_file} << 'MAPEOF'\n{map_content}\nMAPEOF")
 
+            scripts_dir = f"{self.get_remote_sim_dir_for_slot(0)}/scripts"
             tcl = f"{scripts_dir}/program_fpga_fleet.tcl"
             vivado = run("which vivado || which vivado_lab", warn_only=True).strip()
             if not vivado:
                 raise RuntimeError("Could not find vivado or vivado_lab on PATH")
             run(f"{vivado} -mode batch -source {tcl} -tclargs -map_file {map_file}")
 
-            # Step 3: Wait for PCIe link to re-establish after Versal PDI programming
-            self.instance_logger(
-                "Waiting for PCIe link re-training after Versal PDI programming."
-            )
-            run("sleep 10")
-
-            # Step 4: Full PCIe bus rescan (BDF may change after Versal reprogramming)
-            self.instance_logger("Performing full PCIe bus rescan.")
-            run("sudo sh -c 'echo 1 > /sys/bus/pci/rescan'")
-
-            # Step 5: Retry rescan until devices appear (up to 30 seconds)
-            self.instance_logger("Waiting for FPGA devices to reappear on PCIe bus.")
-            run(
-                "for i in $(seq 1 6); do "
-                "  if lspci | grep -iq xilinx; then break; fi; "
-                "  sleep 5; "
-                "  sudo sh -c 'echo 1 > /sys/bus/pci/rescan'; "
-                "done"
-            )
-
-            # Verify devices appeared
-            result = run("lspci | grep -i xilinx", warn_only=True)
-            if result.return_code != 0:
-                raise RuntimeError(
-                    "FPGA devices did not reappear on PCIe bus after rescan"
-                )
-
-            # Step 6: Enable memory-mapped transfers on reappeared devices
-            self.instance_logger("Enabling memory-mapped transfers on FPGA devices.")
-            xilinx_devs = run("lspci -D | grep -i xilinx")
-            for line in xilinx_devs.splitlines():
-                line = line.strip()
-                if line:
-                    ebdf = line.split()[0]  # e.g. '0000:b1:00.0'
-                    self.instance_logger(
-                        f"Enabling memory-mapped transfers for {ebdf}"
-                    )
-                    run(f"sudo setpci -s {ebdf} COMMAND=0x02")
+            # PCIe recovery: Versal PDI programming resets the SoC and
+            # drops the link.  The rescan script removes the stale device
+            # entry (if still present) and triggers a bus rescan.
+            rescan_script = f"{script_path}/firesim-v80-pcie-rescan.sh"
+            self.instance_logger("Running PCIe rescan to recover link.")
+            run(f"sudo {rescan_script}")
 
 
     def infrasetup_instance(self, uridir: str) -> None:
@@ -1674,21 +1643,59 @@ class XilinxAlveoV80InstanceDeployManager(XilinxAlveoInstanceDeployManager):
             for slotno in range(len(self.parent_node.pipe_slots)):
                 self.copy_pipe_slot_infrastructure(slotno)
 
+    def change_pcie_perms(self) -> None:
+        """V80: chmod sysfs files and mask PCIe AER errors (no XDMA)."""
+        if self.instance_assigned_simulations():
+            self.instance_logger("Change permissions on FPGA slot (V80)")
+
+            for slotno, firesimservernode in enumerate(self.parent_node.sim_slots):
+                bdf = self.slot_to_bdf(slotno, self.parent_node.get_fpga_db())
+
+                self.instance_logger(
+                    f"Changing permissions on FPGA Slot: {slotno} (bdf:{bdf})"
+                )
+                cmd = f"{script_path}/firesim-v80-change-pcie-perms"
+                check_script(
+                    cmd,
+                    Path(f"{get_deploy_dir()}/../platforms/{self.PLATFORM_NAME}/scripts"),
+                )
+                run(f"sudo {cmd} 0000:{bdf}")
+
+    def change_all_pcie_perms(self) -> None:
+        """V80: chmod all Xilinx device sysfs entries (no XDMA)."""
+        collect = run("lspci -D | grep -i xilinx")
+
+        for line in collect.splitlines():
+            line = line.strip()
+            if line:
+                ebdf = line.split()[0]  # e.g. '0000:01:00.0'
+                self.instance_logger(
+                    f"Changing permissions on FPGA: {ebdf}"
+                )
+                cmd = f"{script_path}/firesim-v80-change-pcie-perms"
+                check_script(
+                    cmd,
+                    Path(f"{get_deploy_dir()}/../platforms/{self.PLATFORM_NAME}/scripts"),
+                )
+                run(f"sudo {cmd} {ebdf}")
+
     def enumerate_fpgas(self, uridir: str) -> None:
-        """Handle FPGA enumeration for V80 platform (uses QDMA instead of XDMA)."""
+        """Handle FPGA enumeration for V80 platform.
+
+        Enumeration uses Vivado JTAG to discover FPGAs and correlate them
+        to PCIe BDFs.
+
+        TODO(V80-QDMA): When QDMA is supported, unload qdma-pf before
+        enumeration (the script does PCIe disconnect/reconnect).
+        """
 
         if self.instance_assigned_simulations():
-            # This is a sim-host node.
+            # TODO(V80-QDMA): uncomment when DMA datapath is connected
+            # if run("lsmod | grep -wq qdma_pf", warn_only=True).return_code == 0:
+            #     self.instance_logger("Unloading QDMA-PF for enumeration.")
+            #     self.unload_qdma()
 
-            # unload qdma driver
-            self.unload_qdma()
-            # load qdma driver
-            self.load_qdma()
-
-            # change all pcie permissions
             self.change_all_pcie_perms()
-
-            # run the passes
             self.create_fpga_database(uridir)
 
     def start_sim_slot(self, slotno: int) -> None:

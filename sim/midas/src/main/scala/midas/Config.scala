@@ -194,14 +194,6 @@ class XilinxAlveoV80Config
           idBits    = 16,
         )
       case F1ShimHasQSFPPorts  => false
-      case CPUManagedAXI4Key   =>
-        Some(
-          CPUManagedAXI4Params(
-            addrBits = 64,
-            dataBits = 512,
-            idBits   = 16,
-          )
-        )
     }) ++ new XilinxAlveoU250Config)
 
 class NitefuryConfig
