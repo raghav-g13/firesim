@@ -109,7 +109,18 @@ foreach entry $entries {
 
     if {[catch {
         open_hw_target $matched
-        set dev [lindex [get_hw_devices] 0]
+        # Pick the programmable FPGA device, skipping non-programmable
+        # entries like arm_dap (Versal JTAG chains expose both).
+        set dev ""
+        foreach d [get_hw_devices] {
+            if {[string match "xcv*" $d] || [string match "xcu*" $d] || [string match "xc*" $d]} {
+                set dev $d
+                break
+            }
+        }
+        if {$dev eq ""} {
+            set dev [lindex [get_hw_devices] end]
+        }
         current_hw_device $dev
         set_property PROGRAM.FILE $bit $dev
         program_hw_devices $dev
