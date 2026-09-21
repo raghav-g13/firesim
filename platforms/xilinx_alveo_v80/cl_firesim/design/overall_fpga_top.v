@@ -235,6 +235,131 @@ module overall_fpga_top(
         for (pcis_init_i = 0; pcis_init_i < 8192; pcis_init_i = pcis_init_i + 1)
             pcis_mem[pcis_init_i] = 8'h0;
     end
+
+    // =========================================================================
+    // Simulation-only AXI SRAM for DDR4 (bypasses NoC DDR4 VIP)
+    // =========================================================================
+    // The NoC DDR4 VIP behavioral model accepts writes (B=OKAY) but returns
+    // zeros on reads. This SRAM sits on io_slave_0 during simulation to
+    // provide proper AXI4 memory semantics for LoadMem writes and FASED reads.
+    // =========================================================================
+
+    // Intermediate wires: DDR4_0_S_AXI slave outputs from NoC (unused in sim)
+    wire        ddr4_noc_awready;
+    wire        ddr4_noc_wready;
+    wire        ddr4_noc_bvalid;
+    wire [1:0]  ddr4_noc_bresp;
+    wire [15:0] ddr4_noc_bid;
+    wire        ddr4_noc_arready;
+    wire        ddr4_noc_rvalid;
+    wire [63:0] ddr4_noc_rdata;
+    wire        ddr4_noc_rlast;
+    wire [1:0]  ddr4_noc_rresp;
+    wire [15:0] ddr4_noc_rid;
+
+    // 256KB SRAM for DDR4 data (byte-addressable)
+    reg [7:0] ddr4_mem [0:262143];
+
+    // Write channel state
+    reg         ddr4_aw_active;
+    reg [17:0]  ddr4_wr_base_addr;
+    reg [7:0]   ddr4_wr_len;
+    reg [15:0]  ddr4_wr_id;
+    reg [7:0]   ddr4_wr_beat;
+
+    // B response state
+    reg         ddr4_b_pending;
+    reg [15:0]  ddr4_b_id_reg;
+
+    // Read channel state
+    reg         ddr4_rd_active;
+    reg [17:0]  ddr4_rd_base_addr;
+    reg [7:0]   ddr4_rd_len;
+    reg [15:0]  ddr4_rd_id;
+    reg [7:0]   ddr4_rd_beat;
+
+    // SRAM drives io_slave_0 slave response signals
+    wire        ddr4_sram_awready = !ddr4_aw_active && !ddr4_b_pending;
+    wire        ddr4_sram_wready  = ddr4_aw_active;
+    wire        ddr4_sram_bvalid  = ddr4_b_pending;
+    wire [1:0]  ddr4_sram_bresp   = 2'b00;
+    wire [15:0] ddr4_sram_bid     = ddr4_b_id_reg;
+
+    wire        ddr4_sram_arready = !ddr4_rd_active;
+    wire        ddr4_sram_rvalid  = ddr4_rd_active;
+    wire        ddr4_sram_rlast   = ddr4_rd_active && (ddr4_rd_beat == ddr4_rd_len);
+    wire [1:0]  ddr4_sram_rresp   = 2'b00;
+    wire [15:0] ddr4_sram_rid     = ddr4_rd_id;
+
+    // Read data from SRAM (combinational, 8 bytes per beat)
+    integer ddr4_rd_byte_idx;
+    reg [63:0] ddr4_rdata_comb;
+    always @(*) begin
+        ddr4_rdata_comb = 64'b0;
+        for (ddr4_rd_byte_idx = 0; ddr4_rd_byte_idx < 8; ddr4_rd_byte_idx = ddr4_rd_byte_idx + 1) begin
+            ddr4_rdata_comb[ddr4_rd_byte_idx*8 +: 8] = ddr4_mem[((ddr4_rd_base_addr + {7'b0, ddr4_rd_beat, 3'b0} + ddr4_rd_byte_idx) & 18'h3FFFF)];
+        end
+    end
+    wire [63:0] ddr4_sram_rdata = ddr4_rdata_comb;
+
+    // Sequential FSM
+    integer ddr4_wr_byte_idx;
+    always @(posedge sys_clk) begin
+        if (!sys_reset_n) begin
+            ddr4_aw_active <= 1'b0;
+            ddr4_b_pending <= 1'b0;
+            ddr4_rd_active <= 1'b0;
+            ddr4_wr_beat   <= 8'h0;
+            ddr4_rd_beat   <= 8'h0;
+        end else begin
+            if (DDR4_0_S_AXI_awvalid && ddr4_sram_awready) begin
+                ddr4_wr_base_addr <= firesim_slave_0_awaddr[17:0];
+                ddr4_wr_len       <= DDR4_0_S_AXI_awlen;
+                ddr4_wr_id        <= DDR4_0_S_AXI_awid;
+                ddr4_aw_active    <= 1'b1;
+                ddr4_wr_beat      <= 8'h0;
+            end
+
+            if (ddr4_aw_active && DDR4_0_S_AXI_wvalid) begin
+                for (ddr4_wr_byte_idx = 0; ddr4_wr_byte_idx < 8; ddr4_wr_byte_idx = ddr4_wr_byte_idx + 1) begin
+                    if (DDR4_0_S_AXI_wstrb[ddr4_wr_byte_idx])
+                        ddr4_mem[((ddr4_wr_base_addr + {7'b0, ddr4_wr_beat, 3'b0} + ddr4_wr_byte_idx) & 18'h3FFFF)] <= DDR4_0_S_AXI_wdata[ddr4_wr_byte_idx*8 +: 8];
+                end
+                ddr4_wr_beat <= ddr4_wr_beat + 8'h1;
+                if (DDR4_0_S_AXI_wlast) begin
+                    ddr4_aw_active <= 1'b0;
+                    ddr4_b_pending <= 1'b1;
+                    ddr4_b_id_reg  <= ddr4_wr_id;
+                end
+            end
+
+            if (ddr4_b_pending && DDR4_0_S_AXI_bready) begin
+                ddr4_b_pending <= 1'b0;
+            end
+
+            if (DDR4_0_S_AXI_arvalid && ddr4_sram_arready) begin
+                ddr4_rd_base_addr <= firesim_slave_0_araddr[17:0];
+                ddr4_rd_len       <= DDR4_0_S_AXI_arlen;
+                ddr4_rd_id        <= DDR4_0_S_AXI_arid;
+                ddr4_rd_active    <= 1'b1;
+                ddr4_rd_beat      <= 8'h0;
+            end
+
+            if (ddr4_rd_active && DDR4_0_S_AXI_rready) begin
+                if (ddr4_rd_beat == ddr4_rd_len) begin
+                    ddr4_rd_active <= 1'b0;
+                end else begin
+                    ddr4_rd_beat <= ddr4_rd_beat + 8'h1;
+                end
+            end
+        end
+    end
+
+    integer ddr4_init_i;
+    initial begin
+        for (ddr4_init_i = 0; ddr4_init_i < 262144; ddr4_init_i = ddr4_init_i + 1)
+            ddr4_mem[ddr4_init_i] = 8'h0;
+    end
 `endif // SIMULATION
 
     F1Shim firesim_top(
@@ -359,7 +484,8 @@ module overall_fpga_top(
 
         .io_pcis_r_ready(PCIE_M_AXI_rready),
 
-        .io_slave_0_aw_ready(DDR4_0_S_AXI_awready),
+        // io_slave_0: F1Shim outputs always drive DDR4_0_S_AXI wires
+        // (both the SRAM FSM and the NoC see these)
         .io_slave_0_aw_valid(DDR4_0_S_AXI_awvalid),
         .io_slave_0_aw_bits_addr(firesim_slave_0_awaddr),
         .io_slave_0_aw_bits_len(DDR4_0_S_AXI_awlen),
@@ -371,18 +497,13 @@ module overall_fpga_top(
         .io_slave_0_aw_bits_qos(DDR4_0_S_AXI_awqos),
         .io_slave_0_aw_bits_id(DDR4_0_S_AXI_awid),
 
-        .io_slave_0_w_ready(DDR4_0_S_AXI_wready),
         .io_slave_0_w_valid(DDR4_0_S_AXI_wvalid),
         .io_slave_0_w_bits_data(DDR4_0_S_AXI_wdata),
         .io_slave_0_w_bits_last(DDR4_0_S_AXI_wlast),
         .io_slave_0_w_bits_strb(DDR4_0_S_AXI_wstrb),
 
         .io_slave_0_b_ready(DDR4_0_S_AXI_bready),
-        .io_slave_0_b_valid(DDR4_0_S_AXI_bvalid),
-        .io_slave_0_b_bits_resp(DDR4_0_S_AXI_bresp),
-        .io_slave_0_b_bits_id(DDR4_0_S_AXI_bid),
 
-        .io_slave_0_ar_ready(DDR4_0_S_AXI_arready),
         .io_slave_0_ar_valid(DDR4_0_S_AXI_arvalid),
         .io_slave_0_ar_bits_addr(firesim_slave_0_araddr),
         .io_slave_0_ar_bits_len(DDR4_0_S_AXI_arlen),
@@ -395,11 +516,33 @@ module overall_fpga_top(
         .io_slave_0_ar_bits_id(DDR4_0_S_AXI_arid),
 
         .io_slave_0_r_ready(DDR4_0_S_AXI_rready),
+
+`ifdef SIMULATION
+        // In simulation, SRAM handles DDR4 slave responses
+        .io_slave_0_aw_ready(ddr4_sram_awready),
+        .io_slave_0_w_ready(ddr4_sram_wready),
+        .io_slave_0_b_valid(ddr4_sram_bvalid),
+        .io_slave_0_b_bits_resp(ddr4_sram_bresp),
+        .io_slave_0_b_bits_id(ddr4_sram_bid),
+        .io_slave_0_ar_ready(ddr4_sram_arready),
+        .io_slave_0_r_valid(ddr4_sram_rvalid),
+        .io_slave_0_r_bits_resp(ddr4_sram_rresp),
+        .io_slave_0_r_bits_data(ddr4_sram_rdata),
+        .io_slave_0_r_bits_last(ddr4_sram_rlast),
+        .io_slave_0_r_bits_id(ddr4_sram_rid)
+`else
+        .io_slave_0_aw_ready(DDR4_0_S_AXI_awready),
+        .io_slave_0_w_ready(DDR4_0_S_AXI_wready),
+        .io_slave_0_b_valid(DDR4_0_S_AXI_bvalid),
+        .io_slave_0_b_bits_resp(DDR4_0_S_AXI_bresp),
+        .io_slave_0_b_bits_id(DDR4_0_S_AXI_bid),
+        .io_slave_0_ar_ready(DDR4_0_S_AXI_arready),
         .io_slave_0_r_valid(DDR4_0_S_AXI_rvalid),
         .io_slave_0_r_bits_resp(DDR4_0_S_AXI_rresp),
         .io_slave_0_r_bits_data(DDR4_0_S_AXI_rdata),
         .io_slave_0_r_bits_last(DDR4_0_S_AXI_rlast),
         .io_slave_0_r_bits_id(DDR4_0_S_AXI_rid)
+`endif
 
     );
 
