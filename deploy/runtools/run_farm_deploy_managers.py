@@ -1608,6 +1608,10 @@ class XilinxAlveoV80InstanceDeployManager(XilinxAlveoInstanceDeployManager):
             # drops the link.  The rescan script removes the stale device
             # entry (if still present) and triggers a bus rescan.
             rescan_script = f"{script_path}/firesim-v80-pcie-rescan.sh"
+            check_script(
+                rescan_script,
+                Path(f"{get_deploy_dir()}/../platforms/{self.PLATFORM_NAME}/scripts"),
+            )
             self.instance_logger("Running PCIe rescan to recover link.")
             run(f"sudo {rescan_script}")
 
