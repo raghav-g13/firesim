@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "bridges/cpu_managed_stream.h"
@@ -59,6 +60,32 @@ private:
   int qdma_fd;
   void *bar1_base;
   uint32_t bar1_size = 0x2000000; // 32 MB BAR1 (AXI Bridge Master -> io_master)
+
+  // MMIO trace instrumentation
+  bool trace_mmio = false;
+  uint64_t mmio_seq = 0;
+  uint64_t mmio_rd_count = 0;
+  uint64_t mmio_wr_count = 0;
+  struct timespec ts_start;
+  struct timespec ts_last_report;
+  double elapsed_sec() const {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - ts_start.tv_sec) +
+           (now.tv_nsec - ts_start.tv_nsec) * 1e-9;
+  }
+  void maybe_report() {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    double since = (now.tv_sec - ts_last_report.tv_sec) +
+                   (now.tv_nsec - ts_last_report.tv_nsec) * 1e-9;
+    if (since >= 2.0) {
+      fprintf(stderr,
+              "[V80-TRACE] %.3fs | %lu txns total (%lu rd, %lu wr)\n",
+              elapsed_sec(), mmio_seq, mmio_rd_count, mmio_wr_count);
+      ts_last_report = now;
+    }
+  }
 };
 
 static int fpga_pci_check_file_id(char *path, uint16_t id) {
@@ -124,6 +151,16 @@ simif_xilinx_alveo_v80_t::simif_xilinx_alveo_v80_t(
       pci_device_id = strtoul(arg.c_str() + 12, NULL, 16);
       continue;
     }
+    if (arg.find("+v80-trace-mmio") == 0) {
+      trace_mmio = true;
+      continue;
+    }
+  }
+
+  clock_gettime(CLOCK_MONOTONIC, &ts_start);
+  ts_last_report = ts_start;
+  if (trace_mmio) {
+    fprintf(stderr, "[V80-TRACE] MMIO tracing enabled via +v80-trace-mmio\n");
   }
 
   if (!domain_id) {
@@ -282,24 +319,59 @@ void simif_xilinx_alveo_v80_t::fpga_setup(uint16_t domain_id,
           "MMIO-only mode.\n");
 }
 
-simif_xilinx_alveo_v80_t::~simif_xilinx_alveo_v80_t() { fpga_shutdown(); }
+simif_xilinx_alveo_v80_t::~simif_xilinx_alveo_v80_t() {
+  fprintf(stderr,
+          "[V80-TRACE] SHUTDOWN after %.3fs | %lu txns (%lu rd, %lu wr)\n",
+          elapsed_sec(), mmio_seq, mmio_rd_count, mmio_wr_count);
+  fpga_shutdown();
+}
 
 void simif_xilinx_alveo_v80_t::write(size_t addr, uint32_t data) {
+  uint64_t seq = mmio_seq++;
+  mmio_wr_count++;
+  if (trace_mmio) {
+    fprintf(stderr,
+            "[V80-TRACE] #%lu %.3fs WR addr=0x%08zx data=0x%08x\n",
+            seq, elapsed_sec(), addr, data);
+  }
   int rc = fpga_pci_poke(addr, data);
+  if (trace_mmio) {
+    fprintf(stderr,
+            "[V80-TRACE] #%lu %.3fs WR addr=0x%08zx DONE rc=%d\n",
+            seq, elapsed_sec(), addr, rc);
+  }
+  maybe_report();
   check_rc(rc, NULL);
 }
 
 uint32_t simif_xilinx_alveo_v80_t::read(size_t addr) {
+  uint64_t seq = mmio_seq++;
+  mmio_rd_count++;
+  if (trace_mmio) {
+    fprintf(stderr,
+            "[V80-TRACE] #%lu %.3fs RD addr=0x%08zx ...\n",
+            seq, elapsed_sec(), addr);
+  }
   uint32_t value;
   fpga_pci_peek(addr, &value);
-  return value & 0xFFFFFFFF;
+  value &= 0xFFFFFFFF;
+  if (trace_mmio) {
+    fprintf(stderr,
+            "[V80-TRACE] #%lu %.3fs RD addr=0x%08zx => 0x%08x\n",
+            seq, elapsed_sec(), addr, value);
+  }
+  maybe_report();
+  return value;
 }
 
 size_t simif_xilinx_alveo_v80_t::cpu_managed_axi4_read(size_t addr,
                                                        char *data,
                                                        size_t size) {
-  // DMA path disabled — zero-fill and pretend success so stream engine
-  // asserts (bytes_read == pull_bytes) don't fire.
+  if (trace_mmio) {
+    fprintf(stderr,
+            "[V80-TRACE] DMA-RD addr=0x%016zx size=%zu (STUB: zero-fill)\n",
+            addr, size);
+  }
   memset(data, 0, size);
   return size;
 }
@@ -307,7 +379,11 @@ size_t simif_xilinx_alveo_v80_t::cpu_managed_axi4_read(size_t addr,
 size_t simif_xilinx_alveo_v80_t::cpu_managed_axi4_write(size_t addr,
                                                         const char *data,
                                                         size_t size) {
-  // DMA path disabled — discard data and pretend success.
+  if (trace_mmio) {
+    fprintf(stderr,
+            "[V80-TRACE] DMA-WR addr=0x%016zx size=%zu (STUB: discard)\n",
+            addr, size);
+  }
   return size;
 }
 
@@ -316,7 +392,13 @@ uint32_t simif_xilinx_alveo_v80_t::is_write_ready() {
   uint32_t value;
   int rc = fpga_pci_peek(addr, &value);
   check_rc(rc, NULL);
-  return value & 0xFFFFFFFF;
+  value &= 0xFFFFFFFF;
+  if (trace_mmio) {
+    fprintf(stderr,
+            "[V80-TRACE] is_write_ready() addr=0x%04lx => 0x%08x (%s)\n",
+            addr, value, value ? "READY" : "NOT-READY");
+  }
+  return value;
 }
 
 std::unique_ptr<simif_t>
