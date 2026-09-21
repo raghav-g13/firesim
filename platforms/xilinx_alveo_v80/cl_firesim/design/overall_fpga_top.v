@@ -117,13 +117,13 @@ module overall_fpga_top(
     wire        pcis_fs_wready;
     wire        pcis_fs_bvalid;
     wire [1:0]  pcis_fs_bresp;
-    wire [15:0] pcis_fs_bid;
+    wire [5:0]  pcis_fs_bid;
     wire        pcis_fs_arready;
     wire        pcis_fs_rvalid;
     wire [511:0] pcis_fs_rdata;
     wire        pcis_fs_rlast;
     wire [1:0]  pcis_fs_rresp;
-    wire [15:0] pcis_fs_rid;
+    wire [5:0]  pcis_fs_rid;
 
     // 8KB SRAM for DMA data storage
     reg [7:0] pcis_mem [0:8191];
@@ -332,13 +332,13 @@ module overall_fpga_top(
         .io_pcis_aw_bits_prot(3'h0),
         .io_pcis_aw_bits_qos(4'h0),
         .io_pcis_aw_bits_region(4'h0),
-        .io_pcis_aw_bits_id({14'b0, PCIE_M_AXI_awid}),
+        .io_pcis_aw_bits_id({4'b0, PCIE_M_AXI_awid}),
         .io_pcis_aw_bits_user(1'h0),
 
         .io_pcis_w_valid(PCIE_M_AXI_wvalid),
         .io_pcis_w_bits_data(PCIE_M_AXI_wdata),
         .io_pcis_w_bits_last(PCIE_M_AXI_wlast),
-        .io_pcis_w_bits_id(16'h0),
+        .io_pcis_w_bits_id(6'h0),
         .io_pcis_w_bits_strb(PCIE_M_AXI_wstrb),
         .io_pcis_w_bits_user(1'h0),
 
@@ -354,7 +354,7 @@ module overall_fpga_top(
         .io_pcis_ar_bits_prot(3'h0),
         .io_pcis_ar_bits_qos(4'h0),
         .io_pcis_ar_bits_region(4'h0),
-        .io_pcis_ar_bits_id({14'b0, PCIE_M_AXI_arid}),
+        .io_pcis_ar_bits_id({4'b0, PCIE_M_AXI_arid}),
         .io_pcis_ar_bits_user(1'h0),
 
         .io_pcis_r_ready(PCIE_M_AXI_rready),
