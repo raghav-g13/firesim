@@ -36,6 +36,7 @@ class BuildStrategy(Enum):
     CONGESTION = auto()
     NORETIMING = auto()
     DEFAULT = auto()
+    Flow_Quick = auto()
 
     @staticmethod
     def from_string(input: str) -> BuildStrategy:
@@ -260,7 +261,7 @@ class BuildConfig:
         Returns:
             Fully specified make command.
         """
-        return f"""make PLATFORM={self.PLATFORM} TARGET_PROJECT={self.TARGET_PROJECT} {extra_target_project_make_args(self.TARGET_PROJECT, self.TARGET_PROJECT_MAKEFRAG, deploy_dir)} DESIGN={self.DESIGN} TARGET_CONFIG={self.TARGET_CONFIG} PLATFORM_CONFIG={self.PLATFORM_CONFIG} {recipe}"""
+        return f"""make CLASSPATH_CACHE={deploy_dir}/../sim/.classpath_cache PLATFORM={self.PLATFORM} TARGET_PROJECT={self.TARGET_PROJECT} {extra_target_project_make_args(self.TARGET_PROJECT, self.TARGET_PROJECT_MAKEFRAG, deploy_dir)} DESIGN={self.DESIGN} TARGET_CONFIG={self.TARGET_CONFIG} PLATFORM_CONFIG={self.PLATFORM_CONFIG} {recipe}"""
 
     def __repr__(self) -> str:
         return f"< {type(self)}(name={self.name!r}, build_config_file={self.build_config_file!r}) @{id(self)} >"
