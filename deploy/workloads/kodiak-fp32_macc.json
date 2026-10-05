@@ -1,0 +1,8 @@
+{
+  "benchmark_name": "kodiak-fp32_macc",
+  "common_bootbinary": "../../../../../software/kodiak-workloads/fp32_macc.riscv",
+  "common_rootfs": "../../../../../software/firemarshal/boards/default/installers/firesim/dummy.rootfs",
+  "common_simulation_outputs": [
+    "uartlog"
+  ]
+}

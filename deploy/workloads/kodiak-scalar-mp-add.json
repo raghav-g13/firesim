@@ -1,0 +1,8 @@
+{
+  "benchmark_name": "kodiak-scalar-mp-add",
+  "common_bootbinary": "../../../../../software/kodiak-workloads/scalar-mp-add.riscv",
+  "common_rootfs": "../../../../../software/firemarshal/boards/default/installers/firesim/dummy.rootfs",
+  "common_simulation_outputs": [
+    "uartlog"
+  ]
+}

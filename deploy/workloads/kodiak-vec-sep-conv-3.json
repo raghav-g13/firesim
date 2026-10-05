@@ -1,0 +1,8 @@
+{
+  "benchmark_name": "kodiak-vec-sep-conv-3",
+  "common_bootbinary": "../../../../../software/kodiak-workloads/vec-sep-conv-3.riscv",
+  "common_rootfs": "../../../../../software/firemarshal/boards/default/installers/firesim/dummy.rootfs",
+  "common_simulation_outputs": [
+    "uartlog"
+  ]
+}

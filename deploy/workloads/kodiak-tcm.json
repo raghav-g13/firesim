@@ -1,0 +1,8 @@
+{
+  "benchmark_name": "kodiak-tcm",
+  "common_bootbinary": "../../../../../software/kodiak-workloads/tcm.riscv",
+  "common_rootfs": "../../../../../software/firemarshal/boards/default/installers/firesim/dummy.rootfs",
+  "common_simulation_outputs": [
+    "uartlog"
+  ]
+}

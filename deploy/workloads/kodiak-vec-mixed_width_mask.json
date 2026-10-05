@@ -1,0 +1,8 @@
+{
+  "benchmark_name": "kodiak-vec-mixed_width_mask",
+  "common_bootbinary": "../../../../../software/kodiak-workloads/vec-mixed_width_mask.riscv",
+  "common_rootfs": "../../../../../software/firemarshal/boards/default/installers/firesim/dummy.rootfs",
+  "common_simulation_outputs": [
+    "uartlog"
+  ]
+}

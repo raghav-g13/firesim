@@ -1,0 +1,8 @@
+{
+  "benchmark_name": "kodiak-hart1-add",
+  "common_bootbinary": "../../../../../software/kodiak-workloads/hart1-add.riscv",
+  "common_rootfs": "../../../../../software/firemarshal/boards/default/installers/firesim/dummy.rootfs",
+  "common_simulation_outputs": [
+    "uartlog"
+  ]
+}
