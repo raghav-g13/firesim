@@ -12,7 +12,7 @@
 
 set -uo pipefail
 
-TIMEOUT=600
+TIMEOUT=1200
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$DEPLOY_DIR/results-kodiak/$(date +%Y-%m-%d--%H-%M-%S)"
 WORKLOADS=()
